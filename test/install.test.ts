@@ -1,0 +1,49 @@
+import { execFileSync } from 'node:child_process';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+
+// Runs the built CLI against throwaway config dirs (Cursor only: pure file edits, no external CLIs).
+const cli = path.resolve('dist/hivemind.mjs');
+let dir: string;
+let env: NodeJS.ProcessEnv;
+const run = (...args: string[]) => execFileSync(process.execPath, [cli, ...args], { env, encoding: 'utf8' });
+const read = (f: string) => JSON.parse(fs.readFileSync(path.join(dir, 'cursor', f), 'utf8'));
+
+beforeAll(() => {
+  execFileSync(process.execPath, ['build.mjs']);
+  dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hivemind-install-'));
+  fs.mkdirSync(path.join(dir, 'cursor'));
+  fs.writeFileSync(path.join(dir, 'cursor', 'hooks.json'), JSON.stringify({ version: 1, hooks: { afterFileEdit: [{ command: './fmt.sh' }] } }));
+  fs.writeFileSync(path.join(dir, 'cursor', 'mcp.json'), JSON.stringify({ mcpServers: { github: { command: 'gh-mcp' } } }));
+  env = { ...process.env, CURSOR_CONFIG_DIR: path.join(dir, 'cursor'), HIVEMIND_HOME: path.join(dir, 'hm') };
+});
+afterAll(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+describe('install --only=cursor', () => {
+  it('adds hooks and MCP idempotently, keeping existing entries', () => {
+    run('install', '--only=cursor');
+    run('install', '--only=cursor');
+    const hooks = read('hooks.json').hooks;
+    expect(hooks.afterFileEdit).toEqual([{ command: './fmt.sh' }]);
+    for (const e of ['sessionStart', 'postToolUse', 'stop']) {
+      expect(hooks[e]).toHaveLength(1);
+      expect(hooks[e][0].command).toBe(`"${path.join(dir, 'hm', 'bin', 'hivemind')}" hook cursor ${e}`);
+    }
+    const servers = read('mcp.json').mcpServers;
+    expect(Object.keys(servers)).toEqual(['github', 'hivemind']);
+    expect(servers.hivemind.env).toEqual({ HIVEMIND_CWD: '${workspaceFolder}' });
+  });
+
+  it('installs a working launcher', () => {
+    const out = execFileSync(path.join(dir, 'hm', 'bin', 'hivemind'), ['help'], { encoding: 'utf8' });
+    expect(out).toContain('shared, live plan');
+  });
+
+  it('uninstall restores the original entries', () => {
+    run('uninstall', '--only=cursor');
+    expect(read('hooks.json').hooks).toEqual({ afterFileEdit: [{ command: './fmt.sh' }] });
+    expect(Object.keys(read('mcp.json').mcpServers)).toEqual(['github']);
+  });
+});

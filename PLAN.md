@@ -145,7 +145,13 @@ current plan for dedupe, filters by confidence, never steals a teammate's task, 
 Verified via GitHub: agent A wrote a login API without touching hivemind tools; ~10s after A stopped,
 agent B received the inferred `POST /api/login` contract, the cookie decision and A's task mid-task.
 
-**Phase 3 — Cursor + Codex adapters (1–2 days).** ✅ Mixed-agent team stays in sync.
+**Phase 3 — Cursor + Codex adapters: DONE ✅** Per-agent hook adapters; installer detects Claude Code /
+Codex / Cursor and configures each (hooks + MCP). Stable launcher `~/.hivemind/bin/hivemind` so configs
+survive node/hivemind upgrades (and Codex hook trust, which is keyed on the hook's hash, stays valid).
+Codex: verified live — plan injected at start, breaking change received mid-task, MCP tools work with
+`default_tools_approval_mode = "approve"` (empirically: "approve" runs without prompting, "auto" does not),
+`codex exec` works as extractor fallback. Codex requires a one-time `/hooks` approval by the user (by design;
+not bypassed). Cursor: implemented from docs + unit tested; **not yet verified in a live Cursor session**.
 
 **Phase 4 — Polish (1–2 days):** conflict detection, dashboard, `status`/`doctor`, token tuning.
 

@@ -2,7 +2,8 @@ import { formatSummary } from './core/format.js';
 import { daemonPid, ensureDaemon, runDaemon } from './daemon.js';
 import { findRepo, FETCH_REFSPEC, gitAsync, tryGit, LOCAL_PREFIX, readRefs, REMOTE_PREFIX } from './git.js';
 import { runHook } from './hook.js';
-import { readState, rebuild } from './store.js';
+import { KINDS, type Kind } from './core/types.js';
+import { readState, rebuild, touchActivity, writeOps } from './store.js';
 
 const USAGE = `hivemind — a shared, live plan for teams of coding agents
 
@@ -11,6 +12,8 @@ const USAGE = `hivemind — a shared, live plan for teams of coding agents
   hivemind status       show sync state for the current repo
   hivemind plan         print the shared plan for the current repo
   hivemind sync         push + fetch right now
+  hivemind add <kind> <key> <text> [--breaking]
+                        add to the plan yourself (goal, task, contract, decision, question)
 
 internal: hook <agent> <event> | mcp | daemon | extract <agent> <session> <transcript>`;
 
@@ -38,9 +41,9 @@ async function main(): Promise<void> {
     case 'daemon':
       return runDaemon(requireRepo());
     case 'install':
-      return (await import('./install.js')).install();
+      return (await import('./install.js')).install(args);
     case 'uninstall':
-      return (await import('./install.js')).uninstall();
+      return (await import('./install.js')).uninstall(args);
     case 'plan': {
       const repo = requireRepo();
       console.log(formatSummary(rebuild(repo).ops));
@@ -53,6 +56,26 @@ async function main(): Promise<void> {
       await gitAsync(repo.root, ['fetch', '-q', '--no-tags', 'origin', FETCH_REFSPEC]);
       const state = rebuild(repo);
       console.log(`synced: ${state.ops.length} ops`);
+      return;
+    }
+    case 'add': {
+      // Humans can edit the plan too: hivemind add <kind> <key> <text> [--breaking]
+      const breaking = args.includes('--breaking');
+      const [kind, key, ...rest] = args.filter((a) => a !== '--breaking');
+      const textArg = rest.join(' ');
+      if (!KINDS.includes(kind as Kind) || !key || !textArg) {
+        console.error(`usage: hivemind add <${KINDS.join('|')}> <key> <text> [--breaking]`);
+        process.exit(1);
+      }
+      const field = { goal: 'text', decision: 'text', question: 'text', contract: 'spec', task: 'title' }[kind as Kind];
+      const data: Record<string, unknown> = { [field]: textArg };
+      if (kind === 'contract') data.breaking = breaking;
+      if (kind === 'task') data.status = 'todo';
+      const repo = requireRepo();
+      writeOps(repo, [{ kind: kind as Kind, key, data }]);
+      ensureDaemon(repo);
+      touchActivity(repo);
+      console.log(`added ${kind} "${key}"; syncing to teammates`);
       return;
     }
     case 'status': {
