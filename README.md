@@ -71,6 +71,8 @@ Same hooks and MCP tools, no npm needed. Use either the plugin or `npx … insta
 
 ## Commands
 
+`install` puts a `hivemind` command on your PATH (or use `npx hivemind-agents <command>`).
+
 ```
 hivemind status       who's in the plan, last sync
 hivemind plan         print the shared plan

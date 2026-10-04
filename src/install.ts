@@ -21,16 +21,82 @@ function writeLauncher(): void {
   fs.mkdirSync(binDir(), { recursive: true });
   const bundle = path.join(binDir(), 'hivemind.mjs');
   if (path.resolve(process.argv[1]) !== bundle) fs.copyFileSync(process.argv[1], bundle);
+  // Absolute bundle path: the launcher is also reached through a symlink on PATH.
   fs.writeFileSync(
     launcherPath(),
     `#!/bin/sh
 # hivemind launcher: keeps agent configs stable across node and hivemind upgrades.
 NODE="${stableNode()}"
 [ -x "$NODE" ] || NODE="$(command -v node)"
-exec "$NODE" "$(dirname "$0")/hivemind.mjs" "$@"
+exec "$NODE" "${bundle}" "$@"
 `,
     { mode: 0o755 },
   );
+}
+
+// --- putting `hivemind` on the user's PATH ---
+
+const RC_MARKER = '# added by hivemind';
+
+/** Directories we're willing to drop a symlink into, if they're already on PATH. */
+function linkCandidates(): string[] {
+  if (process.env.HIVEMIND_LINK_DIRS) return process.env.HIVEMIND_LINK_DIRS.split(':');
+  const home = os.homedir();
+  return [path.join(home, '.local', 'bin'), path.join(home, 'bin'), '/opt/homebrew/bin', '/usr/local/bin'];
+}
+
+const isOurLink = (file: string) => {
+  try {
+    return fs.lstatSync(file).isSymbolicLink() && fs.readlinkSync(file) === launcherPath();
+  } catch {
+    return false;
+  }
+};
+
+function shellRcFiles(): string[] {
+  const home = os.homedir();
+  const shell = path.basename(process.env.SHELL ?? '');
+  if (shell === 'zsh') return [path.join(home, '.zshrc')];
+  if (shell === 'bash') return [path.join(home, '.bashrc'), path.join(home, '.bash_profile')].filter((f, i) => i === 0 || fs.existsSync(f));
+  return [];
+}
+
+/** Returns how `hivemind` was made reachable, or null if it couldn't be. */
+function linkOntoPath(): string | null {
+  const onPath = new Set((process.env.PATH ?? '').split(path.delimiter).map((d) => path.resolve(d)));
+  if (onPath.has(path.resolve(binDir()))) return 'already on PATH';
+  for (const dir of linkCandidates()) {
+    if (!onPath.has(path.resolve(dir))) continue;
+    const link = path.join(dir, 'hivemind');
+    if (isOurLink(link)) return link;
+    if (fs.existsSync(link)) continue; // someone else's `hivemind`; leave it alone
+    try {
+      fs.accessSync(dir, fs.constants.W_OK);
+      fs.symlinkSync(launcherPath(), link);
+      return link;
+    } catch {}
+  }
+  // No writable PATH dir: add ours to the shell profile, once, with a marker for uninstall.
+  const rcs = shellRcFiles();
+  if (!rcs.length) return null;
+  const line = `export PATH="${binDir()}:$PATH" ${RC_MARKER}`;
+  for (const rc of rcs) {
+    const text = fs.existsSync(rc) ? fs.readFileSync(rc, 'utf8') : '';
+    if (!text.includes(RC_MARKER)) fs.appendFileSync(rc, `${text && !text.endsWith('\n') ? '\n' : ''}${line}\n`);
+  }
+  return `${rcs.map((r) => r.replace(os.homedir(), '~')).join(', ')} (open a new terminal)`;
+}
+
+function unlinkFromPath(): void {
+  for (const dir of linkCandidates()) {
+    const link = path.join(dir, 'hivemind');
+    if (isOurLink(link)) fs.rmSync(link, { force: true });
+  }
+  for (const rc of shellRcFiles()) {
+    if (!fs.existsSync(rc)) continue;
+    const text = fs.readFileSync(rc, 'utf8');
+    if (text.includes(RC_MARKER)) fs.writeFileSync(rc, text.split('\n').filter((l) => !l.includes(RC_MARKER)).join('\n'));
+  }
 }
 const claudeDir = () => process.env.CLAUDE_CONFIG_DIR ?? path.join(os.homedir(), '.claude');
 const codexDir = () => process.env.CODEX_HOME ?? path.join(os.homedir(), '.codex');
@@ -258,6 +324,7 @@ function selected(args: string[]): Integration[] {
 export function install(args: string[] = []): void {
   // Copy the single-file bundle somewhere stable: npx caches are temporary.
   writeLauncher();
+  const reachable = linkOntoPath();
 
   const targets = selected(args);
   if (!targets.length) {
@@ -272,6 +339,7 @@ export function install(args: string[] = []): void {
       return `  ✗ ${t.name}: ${(err as Error).message}`;
     }
   });
+  lines.push(reachable ? `  ✓ \`hivemind\` command: ${reachable}` : `  · \`hivemind\` command: add ${binDir()} to your PATH (or use npx hivemind-agents …)`);
   console.log(`hivemind installed.\n${lines.join('\n')}
 
 That's it. Every agent session inside a git repo with an "origin" remote now shares a live plan
@@ -285,6 +353,9 @@ export function uninstall(args: string[] = []): void {
       t.uninstall();
     } catch {}
   }
-  if (!args.some((a) => a.startsWith('--only='))) fs.rmSync(binDir(), { recursive: true, force: true });
+  if (!args.some((a) => a.startsWith('--only='))) {
+    unlinkFromPath();
+    fs.rmSync(binDir(), { recursive: true, force: true });
+  }
   console.log('hivemind uninstalled. Shared plan data in your repos (refs/hivemind/*) was left untouched.');
 }
