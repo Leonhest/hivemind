@@ -83,6 +83,16 @@ describe('relevance', () => {
   });
 });
 
+describe('replacement', () => {
+  it('describes a removal with what replaced it', () => {
+    const ops = stored([
+      op({ kind: 'decision', key: 'fly', data: { text: 'Fly' } }),
+      op({ kind: 'decision', key: 'fly', type: 'close', data: { superseded_by: 'decision:vercel' }, member: 'erik' }),
+    ]);
+    expect(formatDiff(ops, 1)).toContain('erik removed decision `fly` (replaced by decision:vercel)');
+  });
+});
+
 describe('formatSummary', () => {
   it('groups open entries by kind', () => {
     const s = formatSummary([

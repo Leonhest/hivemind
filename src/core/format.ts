@@ -11,8 +11,10 @@ function clip(text: string, max: number): string {
 export function describeEntry(e: Entry): string {
   const d = e.data;
   switch (e.kind) {
-    case 'goal':
-      return str(d.text);
+    case 'goal': {
+      const alt = Array.isArray(d.alternative_to) && d.alternative_to.length ? ` (competing proposal vs: ${d.alternative_to.join(', ')})` : '';
+      return `${str(d.text)} \`${e.key}\`${alt}`;
+    }
     case 'task': {
       const owner = d.owner ? ` @${str(d.owner)}` : d.status === 'todo' || !d.status ? ' (unassigned)' : '';
       const detail = d.note ?? d.description;
@@ -37,11 +39,34 @@ const SECTIONS: [Kind, string][] = [
   ['question', 'Open questions'],
 ];
 
+/** Open goals that were added as competing proposals and whose rivals are still open. */
+export function competingGoals(entries: Entry[]): string[][] {
+  const open = new Set(entries.filter((e) => e.kind === 'goal' && e.status === 'open').map((e) => e.key));
+  const groups: string[][] = [];
+  for (const e of entries) {
+    if (e.kind !== 'goal' || e.status !== 'open' || !Array.isArray(e.data.alternative_to)) continue;
+    const rivals = (e.data.alternative_to as string[]).filter((k) => open.has(k));
+    if (rivals.length) groups.push([...rivals, e.key]);
+  }
+  return groups;
+}
+
+export const competingWarning = (groups: string[][]) =>
+  groups.length
+    ? `⚠️ Competing goals: the team hasn't picked one yet (${groups.map((g) => g.join(' vs ')).join('; ')}). Ask the user which applies before building on either, then record it with goal_set replaces=[…].`
+    : '';
+
 /** Full plan, used at session start and by plan_get. */
 export function formatSummary(ops: Op[], maxChars = Infinity): string {
-  const entries = [...reduce(ops).values()].filter((e) => e.status === 'open');
+  const openGoals = new Set([...reduce(ops).values()].filter((e) => e.kind === 'goal' && e.status === 'open').map((e) => e.key));
+  // A goal is only "competing" while its rivals are still in the plan.
+  const entries = [...reduce(ops).values()]
+    .filter((e) => e.status === 'open')
+    .map((e) => (Array.isArray(e.data.alternative_to) ? { ...e, data: { ...e.data, alternative_to: (e.data.alternative_to as string[]).filter((k) => openGoals.has(k)) } } : e));
   if (entries.length === 0) return 'The shared plan is empty.';
   const lines: string[] = [];
+  const warning = competingWarning(competingGoals(entries));
+  if (warning) lines.push(warning);
   for (const [kind, title] of SECTIONS) {
     const items = entries.filter((e) => e.kind === kind).sort((a, b) => b.updatedAt - a.updatedAt);
     if (!items.length) continue;
@@ -61,7 +86,10 @@ export function formatSummary(ops: Op[], maxChars = Infinity): string {
 
 export function describeChange(op: Op, before: Entry | undefined): string {
   const who = op.member;
-  if (op.type === 'close') return `${who} closed ${op.kind} \`${op.key}\``;
+  if (op.type === 'close') {
+    const by = typeof op.data.superseded_by === 'string' ? ` (replaced by ${op.data.superseded_by})` : '';
+    return `${who} removed ${op.kind} \`${op.key}\`${by}`;
+  }
   const after = { ...(before ?? { kind: op.kind, key: op.key, status: 'open', createdBy: who, updatedBy: who, updatedAt: op.ts, revisions: 0 }), data: { ...before?.data, ...op.data } } as Entry;
   const verb = before ? 'updated' : 'added';
   let line = `${who} ${verb} ${op.kind}: ${clip(describeEntry(after), 240)}`;

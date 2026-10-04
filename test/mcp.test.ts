@@ -62,4 +62,41 @@ describe('MCP tools', () => {
     expect(res.isError).toBe(true);
     expect(res.text).toContain('pass a title');
   });
+
+  it('goal_set makes the agent choose when goals already exist', async () => {
+    expect((await call('goal_set', { key: 'email-agent', text: 'Renewal agent over email' })).isError).toBe(false);
+    const refused = await call('goal_set', { key: 'phone-agent', text: 'Negotiate by phone' });
+    expect(refused.isError).toBe(true);
+    expect(refused.text).toContain('Not saved yet');
+    expect(refused.text).toContain('"email-agent"');
+    // Updating the same goal needs no decision.
+    expect((await call('goal_set', { key: 'email-agent', text: 'Renewal agent over email, v2' })).isError).toBe(false);
+  });
+
+  it('alongside marks competing goals, flagged at the top of the plan', async () => {
+    const res = await call('goal_set', { key: 'phone-agent', text: 'Negotiate by phone', alongside: true });
+    expect(res.text).toContain('competing proposal');
+    const plan = (await call('plan_get', {})).text;
+    expect(plan).toContain("⚠️ Competing goals: the team hasn't picked one yet (email-agent vs phone-agent)");
+    expect(plan).toContain('(competing proposal vs: email-agent)');
+  });
+
+  it('replaces resolves the competition and removes the old goal', async () => {
+    const res = await call('goal_set', { key: 'phone-agent', text: 'Negotiate by phone (team decided)', replaces: ['email-agent'] });
+    expect(res.text).toContain('Replaced: goal "email-agent"');
+    const plan = (await call('plan_get', {})).text;
+    expect(plan).not.toContain('email-agent');
+    expect(plan).not.toContain('Competing goals');
+  });
+
+  it('decision_log lists existing decisions so the agent can spot contradictions, and replaces removes them', async () => {
+    await call('decision_log', { key: 'db', text: 'SQLite locally' });
+    const hint = await call('decision_log', { key: 'hosting', text: 'Deploy on Fly' });
+    expect(hint.text).toContain('Existing decisions: "db"');
+    await call('decision_log', { key: 'db-neon', text: 'Neon Postgres for everything', replaces: ['db'] });
+    const decisions = (await call('plan_get', { kind: 'decision' })).text;
+    expect(decisions).toContain('Neon Postgres');
+    expect(decisions).not.toContain('SQLite');
+    expect((await call('decision_log', { key: 'x', text: 'y', replaces: ['nope'] })).text).toContain('Nothing to replace');
+  });
 });

@@ -29,6 +29,7 @@ Rules:
 - Keys: kebab-case for tasks/decisions/questions (e.g. "auth-api"); natural names for contracts (e.g. "POST /api/login", "User").
 - Prefer a few high-value entries. An empty list is a good answer when nothing qualifies.
 - evidence: a short verbatim quote from the transcript supporting the entry.
+- replaces: when the work clearly abandons or overturns an existing plan entry (a new approach, a switched library, a dropped feature), list that entry's exact key so it is removed. Only for explicit changes of direction, never because something is merely related.
 - areas: repo-relative files or directories the entry concerns (for tasks: what this agent is changing).
 - NEVER include credentials, tokens, keys, passwords, personal details (emails, phone numbers, real names other than member ids), customer or company names that aren't part of the product, or unfixed security vulnerabilities. Describe the work generically instead (e.g. "hardening auth checks"), or leave it out.
 - Use null for fields that don't apply.`;
@@ -44,7 +45,7 @@ export const SCHEMA = {
       items: {
         type: 'object',
         additionalProperties: false,
-        required: ['kind', 'key', 'title', 'status', 'spec', 'breaking', 'text', 'rationale', 'areas', 'confidence', 'evidence'],
+        required: ['kind', 'key', 'title', 'status', 'spec', 'breaking', 'text', 'rationale', 'areas', 'replaces', 'confidence', 'evidence'],
         properties: {
           kind: { type: 'string', enum: KINDS.filter((k) => k !== 'goal') },
           key: { type: 'string' },
@@ -55,6 +56,7 @@ export const SCHEMA = {
           text: nullable('string'),
           rationale: nullable('string'),
           areas: { type: ['array', 'null'], items: { type: 'string' } },
+          replaces: { type: ['array', 'null'], items: { type: 'string' } },
           confidence: { type: 'number' },
           evidence: { type: 'string' },
         },
@@ -73,6 +75,7 @@ export interface Extracted {
   text?: string | null;
   rationale?: string | null;
   areas?: string[] | null;
+  replaces?: string[] | null;
   confidence: number;
   evidence: string;
 }
@@ -107,32 +110,48 @@ function run(bin: string, args: string[], input: string): Promise<string> {
   });
 }
 
-async function viaClaude(prompt: string): Promise<Extracted[]> {
+export interface ModelOptions {
+  /** Claude model alias; default haiku. */
+  model?: string;
+  /** Hidden thinking is on by default in claude -p and can multiply latency ~5x. */
+  thinking?: boolean;
+}
+
+async function viaClaude(system: string, schema: object, prompt: string, opts: ModelOptions): Promise<any> {
+  const settings = { disableAllHooks: true, ...(opts.thinking === false ? { alwaysThinkingEnabled: false } : {}) };
   const out = await run(
     'claude',
     [
-      '-p', '--model', process.env.HIVEMIND_CLAUDE_MODEL ?? 'haiku',
-      '--settings', '{"disableAllHooks":true}', '--setting-sources', '', '--strict-mcp-config', '--tools', '',
-      '--system-prompt', SYSTEM_PROMPT, '--output-format', 'json', '--json-schema', JSON.stringify(SCHEMA),
+      '-p', '--model', process.env.HIVEMIND_CLAUDE_MODEL ?? opts.model ?? 'haiku',
+      '--settings', JSON.stringify(settings), '--setting-sources', '', '--strict-mcp-config', '--tools', '',
+      '--system-prompt', system, '--output-format', 'json', '--json-schema', JSON.stringify(schema),
     ],
     prompt,
   );
   const parsed = JSON.parse(out);
-  return parsed.structured_output?.ops ?? [];
+  if (process.env.HIVEMIND_DEBUG) {
+    console.error(`[hivemind] claude: ${parsed.duration_ms}ms (api ${parsed.duration_api_ms}ms), ${parsed.num_turns} turns, in ${parsed.usage?.input_tokens}+${parsed.usage?.cache_read_input_tokens ?? 0} out ${parsed.usage?.output_tokens}`);
+  }
+  return parsed.structured_output ?? {};
 }
 
-async function viaCodex(prompt: string): Promise<Extracted[]> {
+async function viaCodex(system: string, schema: object, prompt: string, _opts: ModelOptions): Promise<any> {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hivemind-'));
   try {
-    const schema = path.join(dir, 'schema.json');
+    const schemaFile = path.join(dir, 'schema.json');
     const result = path.join(dir, 'out.json');
-    fs.writeFileSync(schema, JSON.stringify(SCHEMA));
+    fs.writeFileSync(schemaFile, JSON.stringify(schema));
     const model = process.env.HIVEMIND_CODEX_MODEL ? ['-m', process.env.HIVEMIND_CODEX_MODEL] : [];
-    await run('codex', ['exec', '--ephemeral', '--skip-git-repo-check', '--sandbox', 'read-only', ...model, '--output-schema', schema, '-o', result, '-'], `${SYSTEM_PROMPT}\n\n${prompt}`);
-    return JSON.parse(fs.readFileSync(result, 'utf8')).ops ?? [];
+    await run('codex', ['exec', '--ephemeral', '--skip-git-repo-check', '--sandbox', 'read-only', ...model, '--output-schema', schemaFile, '-o', result, '-'], `${system}\n\n${prompt}`);
+    return JSON.parse(fs.readFileSync(result, 'utf8'));
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+}
+
+/** One structured model call on the member's own agent login. */
+export function askModel(backend: Backend, system: string, schema: object, prompt: string, opts: ModelOptions = {}): Promise<any> {
+  return (backend === 'claude' ? viaClaude : viaCodex)(system, schema, prompt, opts);
 }
 
 export type Backend = 'claude' | 'codex';
@@ -177,8 +196,13 @@ export function toOps(extracted: Extracted[], repo: Repo, agentId: string): NewO
     // A task someone else owns: record progress without stealing ownership.
     if (e.kind === 'task' && existing?.data.owner && existing.data.owner !== repo.memberId) delete data.owner;
     const unchanged = existing?.status === 'open' && Object.entries(data).every(([k, v]) => JSON.stringify(existing.data[k]) === JSON.stringify(v));
-    if (unchanged) continue;
+    if (unchanged && !e.replaces?.length) continue;
     ops.push({ kind: e.kind, key: e.key.trim(), data, source: 'inferred', evidence: String(e.evidence ?? '').slice(0, 300), agent: agentId });
+    for (const old of e.replaces ?? []) {
+      const target = entries.get(entryId({ kind: e.kind, key: old }));
+      if (old === e.key || target?.status !== 'open') continue;
+      ops.push({ type: 'close', kind: e.kind, key: old, data: { superseded_by: `${e.kind}:${e.key.trim()}` }, source: 'inferred', evidence: String(e.evidence ?? '').slice(0, 300), agent: agentId });
+    }
     if (ops.length >= MAX_OPS_PER_RUN) break;
   }
   return ops;
@@ -252,7 +276,7 @@ async function extractOnce(repo: Repo, agent: string, session: string, transcrip
   const backend = pickBackend(agent);
   if (!backend) return save();
   const started = Date.now();
-  const extracted = await (backend === 'claude' ? viaClaude : viaCodex)(buildPrompt(repo, segment));
+  const extracted: Extracted[] = (await askModel(backend, SYSTEM_PROMPT, SCHEMA, buildPrompt(repo, segment))).ops ?? [];
   const ops = toOps(extracted, repo, session);
   if (ops.length) writeOps(repo, ops);
   save();

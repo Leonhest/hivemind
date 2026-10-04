@@ -1,6 +1,6 @@
 {
   "name": "hivemind",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "A shared, live plan for teams of coding agents. Teammates' API contracts, decisions and task claims reach your agent at its next tool call. Syncs through your git remote: no server, no account.",
   "author": {
     "name": "Leonhest"

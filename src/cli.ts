@@ -12,6 +12,7 @@ const USAGE = `hivemind — a shared, live plan for teams of coding agents
   hivemind uninstall    remove them
   hivemind status       show sync state for the current repo
   hivemind open         live dashboard in your browser
+  hivemind review       check the plan for contradictions (uses your claude/codex login)
   hivemind doctor       check that everything is wired up
   hivemind disable      turn hivemind off for this clone (enable to turn it back on)
   hivemind plan         print the shared plan for the current repo
@@ -80,6 +81,14 @@ async function main(): Promise<void> {
       ensureDaemon(repo);
       touchActivity(repo);
       console.log(`added ${kind} "${key}"; syncing to teammates`);
+      return;
+    }
+    case 'review': {
+      const { reviewPlan, formatConflicts } = await import('./review.js');
+      const repo = requireRepo();
+      rebuild(repo);
+      console.log('Checking the plan for contradictions…');
+      console.log(formatConflicts(await reviewPlan(repo)));
       return;
     }
     case 'open':

@@ -11,7 +11,8 @@ export function applyOp(entries: Map<string, Entry>, op: Op): void {
   const id = entryId(op);
   const prev = entries.get(id);
   if (op.type === 'close') {
-    if (prev) entries.set(id, { ...prev, status: 'closed', updatedBy: op.member, updatedAt: op.ts, revisions: prev.revisions + 1 });
+    // Close ops may carry why (e.g. superseded_by), kept on the closed entry.
+    if (prev) entries.set(id, { ...prev, data: { ...prev.data, ...op.data }, status: 'closed', updatedBy: op.member, updatedAt: op.ts, revisions: prev.revisions + 1 });
     return;
   }
   entries.set(id, {

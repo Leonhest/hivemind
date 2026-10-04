@@ -91,6 +91,29 @@ describe('toOps', () => {
   });
 });
 
+describe('toOps replaces', () => {
+  let dir: string;
+  let repo: Repo;
+  beforeAll(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hivemind-replace-'));
+    execFileSync('git', ['init', '-q', '--bare', 'remote.git'], { cwd: dir });
+    execFileSync('git', ['clone', '-q', 'remote.git', 'me'], { cwd: dir, stdio: 'pipe' });
+    repo = findRepo(path.join(dir, 'me'))!;
+    writeOps(repo, [{ kind: 'decision', key: 'hosting-fly', data: { text: 'Deploy on Fly' } }]);
+  });
+  afterAll(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+  it('closes the entry an inferred change of direction replaces', () => {
+    const ops = toOps(
+      [{ kind: 'decision', key: 'hosting-vercel', text: 'Deploy on Vercel', replaces: ['hosting-fly', 'unknown'], confidence: 0.9, evidence: 'moved to Vercel' } as Extracted],
+      repo,
+      's1',
+    );
+    expect(ops.map((o) => [o.type ?? 'upsert', o.key])).toEqual([['upsert', 'hosting-vercel'], ['close', 'hosting-fly']]);
+    expect(ops[1].data).toEqual({ superseded_by: 'decision:hosting-vercel' });
+  });
+});
+
 describe('adapters', () => {
   it('Cursor: maps events and fields, always answers with JSON', () => {
     const input = ADAPTERS.cursor.parse('postToolUse', {

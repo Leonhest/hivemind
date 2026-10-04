@@ -35,6 +35,19 @@ records goals, contracts, decisions and tasks in hivemind (tasks unassigned, wit
 each teammate's agent can claim one by key. You can also add things yourself with `hivemind add` or
 in the dashboard (`hivemind open`).
 
+## When the plan changes direction
+
+Plans change mid-hackathon. hivemind makes sure the old direction doesn't linger next to the new one:
+
+- **New goals must say how they relate** to existing ones: they *replace* them, or are a *competing
+  proposal*. Competing goals are flagged to every agent ("the team hasn't picked one yet, ask the
+  user") until someone resolves them.
+- Decisions and contracts can **replace** earlier ones, and agents are shown existing entries when
+  they add new ones so they can spot contradictions. The background extractor removes entries that
+  the work clearly abandoned.
+- `hivemind review` (or the `plan_review` tool) has the model check the whole plan for contradictions
+  and suggest fixes (~15 s).
+
 ## How it works
 
 ```
@@ -84,6 +97,7 @@ Same hooks and MCP tools, no npm needed. Use either the plugin or `npx … insta
 hivemind status       who's in the plan, last sync
 hivemind plan         print the shared plan
 hivemind open         live dashboard in your browser (and a form to add to the plan)
+hivemind review       check the plan for contradictions
 hivemind add <goal|task|contract|decision|question> <key> <text> [--breaking]
 hivemind doctor       check that everything is wired up
 hivemind disable      turn hivemind off for this clone (hivemind enable to undo)
