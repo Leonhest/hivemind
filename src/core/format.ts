@@ -57,7 +57,7 @@ export function formatSummary(ops: Op[], maxChars = Infinity): string {
   return out.trimEnd();
 }
 
-function describeChange(op: Op, before: Entry | undefined): string {
+export function describeChange(op: Op, before: Entry | undefined): string {
   const who = op.member;
   if (op.type === 'close') return `${who} closed ${op.kind} \`${op.key}\``;
   const after = { ...(before ?? { kind: op.kind, key: op.key, status: 'open', createdBy: who, updatedBy: who, updatedAt: op.ts, revisions: 0 }), data: { ...before?.data, ...op.data } } as Entry;

@@ -153,7 +153,11 @@ Codex: verified live — plan injected at start, breaking change received mid-ta
 `codex exec` works as extractor fallback. Codex requires a one-time `/hooks` approval by the user (by design;
 not bypassed). Cursor: implemented from docs + unit tested; **not yet verified in a live Cursor session**.
 
-**Phase 4 — Polish (1–2 days):** conflict detection, dashboard, `status`/`doctor`, token tuning.
+**Phase 4 — Polish: DONE ✅** Relevance ranking (🎯 entries overlapping files you touched) + conflict
+warnings when a teammate starts work on your files; routine task chatter collapsed; `hivemind open`
+dashboard (local, token-protected add form); `hivemind doctor`; `status` with last fetch/push/error;
+daemon push/fetch back off independently (members without push access still receive updates);
+`hivemind add` for humans.
 
 **Phase 5 — Launch:** README + 3-terminal demo GIF, MCP registry, Claude Code plugin marketplace,
 dogfood at next hackathon.

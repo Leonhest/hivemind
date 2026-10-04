@@ -1,5 +1,5 @@
 import { formatSummary } from './core/format.js';
-import { daemonPid, ensureDaemon, runDaemon } from './daemon.js';
+import { daemonPid, ensureDaemon, readSyncStatus, runDaemon } from './daemon.js';
 import { findRepo, FETCH_REFSPEC, gitAsync, tryGit, LOCAL_PREFIX, readRefs, REMOTE_PREFIX } from './git.js';
 import { runHook } from './hook.js';
 import { KINDS, type Kind } from './core/types.js';
@@ -10,6 +10,8 @@ const USAGE = `hivemind — a shared, live plan for teams of coding agents
   hivemind install      set up hooks + MCP for Claude Code (once per machine)
   hivemind uninstall    remove them
   hivemind status       show sync state for the current repo
+  hivemind open         live dashboard in your browser
+  hivemind doctor       check that everything is wired up
   hivemind plan         print the shared plan for the current repo
   hivemind sync         push + fetch right now
   hivemind add <kind> <key> <text> [--breaking]
@@ -78,17 +80,24 @@ async function main(): Promise<void> {
       console.log(`added ${kind} "${key}"; syncing to teammates`);
       return;
     }
+    case 'open':
+      return (await import('./dashboard.js')).runDashboard(requireRepo(), args);
+    case 'doctor':
+      return (await import('./doctor.js')).runDoctor();
     case 'status': {
       const repo = requireRepo();
       const state = readState(repo);
       const members = new Set(Object.keys(readRefs(repo)).map((r) => r.replace(REMOTE_PREFIX, '').replace(LOCAL_PREFIX, '')));
       const pid = daemonPid(repo);
+      const sync = readSyncStatus(repo);
+      const ago = (ts?: number) => (ts ? `${Math.round((Date.now() - ts) / 1000)}s ago` : 'never');
+      const err = sync.lastErrorAt && sync.lastErrorAt > (sync.lastFetch ?? 0) ? `\nerror:   ${sync.lastError}` : '';
       console.log(`repo:    ${repo.root}
 you:     ${repo.memberId}
 members: ${[...members].join(', ') || '(none yet)'}
 ops:     ${state.ops.length}
 daemon:  ${pid ? `running (pid ${pid})` : 'stopped (starts automatically with your agent)'}
-state:   ${repo.stateDir}`);
+synced:  fetched ${ago(sync.lastFetch)}, pushed ${ago(sync.lastPush)}${err}`);
       return;
     }
     case 'start': // undocumented helper for tests

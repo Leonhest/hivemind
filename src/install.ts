@@ -99,7 +99,14 @@ interface Integration {
   detected(): boolean;
   install(): string;
   uninstall(): void;
+  /** Is hivemind wired in? Returns problems; empty means healthy. */
+  check(): string[];
 }
+
+const hasNestedHooks = (file: string, events: string[]) => {
+  const hooks = fs.existsSync(file) ? readJson(file).hooks ?? {} : {};
+  return events.filter((e) => !(hooks[e] ?? []).some((g: Json) => (g.hooks ?? []).some(ours)));
+};
 
 const claude: Integration = {
   name: 'Claude Code',
@@ -127,6 +134,12 @@ const claude: Integration = {
       writeJson(file, settings);
     }
     runQuiet('claude', ['mcp', 'remove', '--scope', 'user', 'hivemind']);
+  },
+  check() {
+    const missing = hasNestedHooks(path.join(claudeDir(), 'settings.json'), ['SessionStart', 'UserPromptSubmit', 'PostToolUse', 'Stop']);
+    const problems = missing.length ? [`hooks missing: ${missing.join(', ')}`] : [];
+    if (has('claude') && !runQuiet('claude', ['mcp', 'get', 'hivemind'])) problems.push('MCP server not registered');
+    return problems;
   },
 };
 
@@ -174,6 +187,16 @@ const codex: Integration = {
     }
     runQuiet('codex', ['mcp', 'remove', 'hivemind']);
   },
+  check() {
+    const missing = hasNestedHooks(path.join(codexDir(), 'hooks.json'), ['SessionStart', 'UserPromptSubmit', 'PostToolUse', 'Stop']);
+    const problems = missing.length ? [`hooks missing: ${missing.join(', ')}`] : [];
+    const toml = path.join(codexDir(), 'config.toml');
+    const config = fs.existsSync(toml) ? fs.readFileSync(toml, 'utf8') : '';
+    if (!config.includes('[mcp_servers.hivemind]')) problems.push('MCP server not registered');
+    else if (!/\[mcp_servers\.hivemind\]\ndefault_tools_approval_mode = "approve"/.test(config)) problems.push('MCP tools not pre-approved (Codex will prompt)');
+    if (/^\s*hooks\s*=\s*false/m.test(config)) problems.push('hooks are disabled in config.toml ([features] hooks = false)');
+    return problems;
+  },
 };
 
 const cursor: Integration = {
@@ -213,6 +236,14 @@ const cursor: Integration = {
         writeJson(mcpFile, mcp);
       }
     }
+  },
+  check() {
+    const hooks = fs.existsSync(path.join(cursorDir(), 'hooks.json')) ? readJson(path.join(cursorDir(), 'hooks.json')).hooks ?? {} : {};
+    const missing = ['sessionStart', 'postToolUse', 'stop'].filter((e) => !(hooks[e] ?? []).some(ours));
+    const problems = missing.length ? [`hooks missing: ${missing.join(', ')}`] : [];
+    const mcp = fs.existsSync(path.join(cursorDir(), 'mcp.json')) ? readJson(path.join(cursorDir(), 'mcp.json')) : {};
+    if (!mcp.mcpServers?.hivemind) problems.push('MCP server not registered');
+    return problems;
   },
 };
 

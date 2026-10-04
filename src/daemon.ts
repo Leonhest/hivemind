@@ -11,6 +11,28 @@ const ACTIVE_WINDOW_MS = 10 * 60_000;
 const EXIT_AFTER_IDLE_MS = 30 * 60_000;
 
 const pidPath = (repo: Repo) => path.join(repo.stateDir, 'daemon.pid');
+const syncPath = (repo: Repo) => path.join(repo.stateDir, 'sync.json');
+
+export interface SyncStatus {
+  lastFetch?: number;
+  lastPush?: number;
+  lastError?: string;
+  lastErrorAt?: number;
+}
+
+export function readSyncStatus(repo: Repo): SyncStatus {
+  try {
+    return JSON.parse(fs.readFileSync(syncPath(repo), 'utf8'));
+  } catch {
+    return {};
+  }
+}
+
+function recordSync(repo: Repo, update: SyncStatus): void {
+  try {
+    fs.writeFileSync(syncPath(repo), JSON.stringify({ ...readSyncStatus(repo), ...update }));
+  } catch {}
+}
 
 function alive(pid: number): boolean {
   try {
@@ -63,7 +85,14 @@ export async function runDaemon(repo: Repo): Promise<void> {
 
   const remoteOwn = REMOTE_PREFIX + repo.memberId;
   let lastFetch = 0;
-  let failures = 0;
+  let fetchFailures = 0;
+  let pushFailures = 0;
+  let nextPushAt = 0;
+  const backoff = (n: number) => Math.min(60_000, 2_500 * 2 ** Math.min(n, 5));
+  const fail = (what: string, err: unknown, n: number) => {
+    log(repo, `${what} error (${n}): ${(err as Error).message}`);
+    recordSync(repo, { lastError: `${what}: ${(err as Error).message.slice(0, 500)}`, lastErrorAt: Date.now() });
+  };
 
   for (;;) {
     const idleFor = Date.now() - lastActivity(repo);
@@ -71,24 +100,31 @@ export async function runDaemon(repo: Repo): Promise<void> {
       log(repo, 'daemon exiting: idle');
       return;
     }
-    const backoff = Math.min(failures, 5) * 5_000;
-    try {
-      // Push whenever our ref is ahead of what the remote is known to have.
-      const local = tryGit(repo.root, ['rev-parse', '-q', '--verify', repo.ownRef]);
-      if (local && local !== tryGit(repo.root, ['rev-parse', '-q', '--verify', remoteOwn])) {
+    // Push whenever our ref is ahead of what the remote is known to have.
+    // Failures (e.g. no push access) back off independently, so fetching keeps working.
+    const local = tryGit(repo.root, ['rev-parse', '-q', '--verify', repo.ownRef]);
+    if (local && Date.now() >= nextPushAt && local !== tryGit(repo.root, ['rev-parse', '-q', '--verify', remoteOwn])) {
+      try {
         await gitAsync(repo.root, ['push', '-q', 'origin', `${repo.ownRef}:${repo.ownRef}`]);
         git(repo.root, ['update-ref', remoteOwn, local]);
+        recordSync(repo, { lastPush: Date.now() });
+        pushFailures = 0;
+      } catch (err) {
+        fail('push', err, ++pushFailures);
+        nextPushAt = Date.now() + backoff(pushFailures);
       }
-      const interval = (idleFor < ACTIVE_WINDOW_MS ? ACTIVE_FETCH_MS : IDLE_FETCH_MS) + backoff;
-      if (Date.now() - lastFetch >= interval) {
-        lastFetch = Date.now();
+    }
+    const interval = (idleFor < ACTIVE_WINDOW_MS ? ACTIVE_FETCH_MS : IDLE_FETCH_MS) + (fetchFailures ? backoff(fetchFailures) : 0);
+    if (Date.now() - lastFetch >= interval) {
+      lastFetch = Date.now();
+      try {
         await gitAsync(repo.root, ['fetch', '-q', '--no-tags', 'origin', FETCH_REFSPEC]);
         rebuild(repo);
+        recordSync(repo, { lastFetch: Date.now() });
+        fetchFailures = 0;
+      } catch (err) {
+        fail('fetch', err, ++fetchFailures);
       }
-      failures = 0;
-    } catch (err) {
-      failures++;
-      log(repo, `sync error (${failures}): ${(err as Error).message}`);
     }
     await new Promise((r) => setTimeout(r, 500));
   }
