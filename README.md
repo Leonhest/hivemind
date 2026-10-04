@@ -28,6 +28,13 @@ Check whether your current work depends on the breaking changes above and adapt 
 At session start it gets the whole plan: goals, contracts (API shapes, schemas, shared types),
 decisions, who's doing what, and open questions.
 
+## Starting a plan
+
+Just ask your agent, e.g. *"We're 3 people building X this weekend. Make a plan for the team."* It
+records goals, contracts, decisions and tasks in hivemind (tasks unassigned, with dependencies), and
+each teammate's agent can claim one by key. You can also add things yourself with `hivemind add` or
+in the dashboard (`hivemind open`).
+
 ## How it works
 
 ```
@@ -46,7 +53,7 @@ decisions, who's doing what, and open questions.
 - **The plan updates itself.** When an agent finishes a turn, a background extractor reads only the
   new part of its transcript and pulls out the things teammates need: contracts, decisions and task
   progress, each with a quote as evidence. Agents can also publish explicitly through MCP tools
-  (`contract_publish`, `decision_log`, `task_claim`, …), and they're told to for anything urgent.
+  (`contract_publish`, `decision_log`, `task_add`, `task_claim`, …), and they're told to for anything urgent.
 - **Updates arrive in seconds.** Typically 2–5 s from one agent's change to the other machine,
   then shown at that agent's next tool call.
 

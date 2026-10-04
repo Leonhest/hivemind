@@ -14,9 +14,11 @@ export function describeEntry(e: Entry): string {
     case 'goal':
       return str(d.text);
     case 'task': {
-      const owner = d.owner ? ` @${str(d.owner)}` : '';
-      const note = d.note ? ` — ${str(d.note)}` : '';
-      return `[${str(d.status) || 'todo'}] ${str(d.title) || e.key}${owner}${note}`;
+      const owner = d.owner ? ` @${str(d.owner)}` : d.status === 'todo' || !d.status ? ' (unassigned)' : '';
+      const detail = d.note ?? d.description;
+      const note = detail ? ` — ${str(detail)}` : '';
+      const deps = Array.isArray(d.depends_on) && d.depends_on.length ? ` (after: ${d.depends_on.join(', ')})` : '';
+      return `[${str(d.status) || 'todo'}] ${str(d.title) || e.key} \`${e.key}\`${owner}${deps}${note}`;
     }
     case 'contract':
       return `\`${e.key}\`: ${str(d.spec)}${d.breaking ? ' (breaking)' : ''}`;

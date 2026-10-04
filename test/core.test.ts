@@ -90,6 +90,6 @@ describe('formatSummary', () => {
       op({ kind: 'task', key: 't', data: { title: 'Auth', status: 'doing', owner: 'alice' } }),
     ]);
     expect(s).toContain('## Goals\n- Todo app');
-    expect(s).toContain('[doing] Auth @alice');
+    expect(s).toContain('[doing] Auth `t` @alice');
   });
 });
