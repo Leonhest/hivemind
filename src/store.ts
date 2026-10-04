@@ -136,6 +136,13 @@ export interface Session {
   ownOps: string[];
   touched: string[];
   startedAt: number;
+  /** The "claim a task first" reminder was shown. */
+  nudgedClaim?: boolean;
+  turnStartedAt?: number;
+  /** Files edited during the current turn. */
+  turnEdits?: string[];
+  /** A finished turn that changed files, still to be checked for a plan update. */
+  pendingCheck?: { since: number; files: string[]; at: number };
 }
 
 const sessionPath = (repo: Repo, id: string) => path.join(repo.stateDir, 'sessions', `${id.replace(/[^\w-]/g, '_')}.json`);

@@ -43,6 +43,18 @@
           }
         ]
       }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Edit|MultiEdit|Write|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/dist/hivemind.mjs\" hook claude PreToolUse",
+            "timeout": 5
+          }
+        ]
+      }
     ]
   }
 }

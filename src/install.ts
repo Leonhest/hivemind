@@ -160,6 +160,10 @@ function runQuiet(bin: string, args: string[]): boolean {
 // The hook command must stay byte-identical across upgrades: Codex asks users to re-approve changed hooks.
 const command = () => `"${launcherPath()}"`;
 
+// PreToolUse only needs to fire for tools that change files.
+const CLAUDE_EDIT_TOOLS = 'Edit|MultiEdit|Write|NotebookEdit';
+const CODEX_EDIT_TOOLS = 'apply_patch|Edit|Write';
+
 interface Integration {
   name: string;
   detected(): boolean;
@@ -184,6 +188,10 @@ const claude: Integration = {
     for (const event of ['SessionStart', 'UserPromptSubmit', 'PostToolUse', 'Stop']) {
       settings.hooks[event] = [...(settings.hooks[event] ?? []), { hooks: [{ type: 'command', command: `${command()} hook claude ${event}`, timeout: 5 }] }];
     }
+    settings.hooks.PreToolUse = [
+      ...(settings.hooks.PreToolUse ?? []),
+      { matcher: CLAUDE_EDIT_TOOLS, hooks: [{ type: 'command', command: `${command()} hook claude PreToolUse`, timeout: 5 }] },
+    ];
     const allow: string[] = (settings.permissions?.allow ?? []).filter((p: string) => p !== 'mcp__hivemind');
     settings.permissions = { ...settings.permissions, allow: [...allow, 'mcp__hivemind'] };
     writeJson(file, settings);
@@ -202,7 +210,7 @@ const claude: Integration = {
     runQuiet('claude', ['mcp', 'remove', '--scope', 'user', 'hivemind']);
   },
   check() {
-    const missing = hasNestedHooks(path.join(claudeDir(), 'settings.json'), ['SessionStart', 'UserPromptSubmit', 'PostToolUse', 'Stop']);
+    const missing = hasNestedHooks(path.join(claudeDir(), 'settings.json'), ['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'Stop']);
     const problems = missing.length ? [`hooks missing: ${missing.join(', ')}`] : [];
     if (has('claude') && !runQuiet('claude', ['mcp', 'get', 'hivemind'])) problems.push('MCP server not registered');
     return problems;
@@ -239,6 +247,10 @@ const codex: Integration = {
     for (const event of ['SessionStart', 'UserPromptSubmit', 'PostToolUse', 'Stop']) {
       config.hooks[event] = [...(config.hooks[event] ?? []), { hooks: [{ type: 'command', command: `${command()} hook codex ${event}`, timeout: 5 }] }];
     }
+    config.hooks.PreToolUse = [
+      ...(config.hooks.PreToolUse ?? []),
+      { matcher: CODEX_EDIT_TOOLS, hooks: [{ type: 'command', command: `${command()} hook codex PreToolUse`, timeout: 5 }] },
+    ];
     writeJson(file, config);
     runQuiet('codex', ['mcp', 'remove', 'hivemind']);
     const mcp = runQuiet('codex', ['mcp', 'add', 'hivemind', '--', launcherPath(), 'mcp']) && preapproveCodexTools();
@@ -254,7 +266,7 @@ const codex: Integration = {
     runQuiet('codex', ['mcp', 'remove', 'hivemind']);
   },
   check() {
-    const missing = hasNestedHooks(path.join(codexDir(), 'hooks.json'), ['SessionStart', 'UserPromptSubmit', 'PostToolUse', 'Stop']);
+    const missing = hasNestedHooks(path.join(codexDir(), 'hooks.json'), ['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'Stop']);
     const problems = missing.length ? [`hooks missing: ${missing.join(', ')}`] : [];
     const toml = path.join(codexDir(), 'config.toml');
     const config = fs.existsSync(toml) ? fs.readFileSync(toml, 'utf8') : '';

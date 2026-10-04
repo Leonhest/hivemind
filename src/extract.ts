@@ -218,7 +218,20 @@ export function buildPrompt(repo: Repo, segment: string): string {
 
 interface Cursor {
   offset: number;
+  /** When the extractor last reviewed this session's work (even if it found nothing to record). */
+  reviewedAt?: number;
 }
+
+/** Last time the extractor finished reviewing this session, if ever. */
+export function lastReviewed(repo: Repo, session: string): number {
+  try {
+    return (JSON.parse(fs.readFileSync(sessionFile(repo, session, 'extract.json'), 'utf8')) as Cursor).reviewedAt ?? 0;
+  } catch {
+    return 0;
+  }
+}
+
+export const isExtracting = (repo: Repo, session: string) => fs.existsSync(sessionFile(repo, session, 'extract.lock'));
 
 const sessionFile = (repo: Repo, session: string, suffix: string) =>
   path.join(repo.stateDir, 'sessions', `${session.replace(/[^\w-]/g, '_')}.${suffix}`);
@@ -270,15 +283,16 @@ async function extractOnce(repo: Repo, agent: string, session: string, transcrip
   const cursor: Cursor = fs.existsSync(cursorPath) ? JSON.parse(fs.readFileSync(cursorPath, 'utf8')) : { offset: 0 };
   const { lines, offset } = newLines(transcript, cursor.offset);
   const segment = renderTranscript(lines);
-  const save = () => fs.writeFileSync(cursorPath, JSON.stringify({ offset }));
-  if (!isSubstantive(segment)) return save();
+  const save = (reviewed: boolean) =>
+    fs.writeFileSync(cursorPath, JSON.stringify({ offset, reviewedAt: reviewed ? Date.now() : cursor.reviewedAt }));
+  if (!isSubstantive(segment)) return save(true);
 
   const backend = pickBackend(agent);
-  if (!backend) return save();
+  if (!backend) return save(false);
   const started = Date.now();
   const extracted: Extracted[] = (await askModel(backend, SYSTEM_PROMPT, SCHEMA, buildPrompt(repo, segment))).ops ?? [];
   const ops = toOps(extracted, repo, session);
   if (ops.length) writeOps(repo, ops);
-  save();
+  save(true);
   log(repo, `extract ${agent}/${session} via ${backend}: ${lines.length} lines → ${extracted.length} candidates → ${ops.length} ops in ${Date.now() - started}ms`);
 }

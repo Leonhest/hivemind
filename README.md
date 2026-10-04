@@ -67,6 +67,9 @@ Plans change mid-hackathon. hivemind makes sure the old direction doesn't linger
   new part of its transcript and pulls out the things teammates need: contracts, decisions and task
   progress, each with a quote as evidence. Agents can also publish explicitly through MCP tools
   (`contract_publish`, `decision_log`, `task_add`, `task_claim`, …), and they're told to for anything urgent.
+- **Work doesn't go unrecorded.** Before an agent's first file edit, if it has no task in progress it's
+  asked to claim one (and shown the unclaimed tasks). After a turn that changed files, if neither the
+  agent nor the extractor recorded anything, it's reminded to update its task.
 - **Updates arrive in seconds.** Typically 2–5 s from one agent's change to the other machine,
   then shown at that agent's next tool call.
 

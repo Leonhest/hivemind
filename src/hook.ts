@@ -1,14 +1,15 @@
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { formatDiff, formatSummary } from './core/format.js';
+import { reduce } from './core/plan.js';
 import { ensureDaemon, readSyncStatus } from './daemon.js';
-import { spawnExtract } from './extract.js';
+import { isExtracting, lastReviewed, spawnExtract } from './extract.js';
 import { FETCH_REFSPEC, findRepo, type Repo } from './git.js';
 import { log } from './log.js';
 import { PUBLIC_NOTICE, readVisibility, refreshVisibility } from './visibility.js';
 import { loadSession, readState, rebuild, saveSession, touchActivity, type Session } from './store.js';
 
-export type HookEvent = 'SessionStart' | 'UserPromptSubmit' | 'PostToolUse' | 'Stop';
+export type HookEvent = 'SessionStart' | 'UserPromptSubmit' | 'PreToolUse' | 'PostToolUse' | 'Stop';
 
 /** Agent-independent view of a hook call. */
 export interface HookInput {
@@ -28,7 +29,7 @@ interface Adapter {
   render(event: HookEvent, context: string): string;
 }
 
-const CLAUDE_EVENTS = new Set<HookEvent>(['SessionStart', 'UserPromptSubmit', 'PostToolUse', 'Stop']);
+const CLAUDE_EVENTS = new Set<HookEvent>(['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'Stop']);
 
 /** Claude Code and Codex share a hook protocol. */
 const claudeLike = (stopOutput: string): Adapter => ({
@@ -91,6 +92,43 @@ function ownOpIds(input: HookInput): string[] {
   return [...JSON.stringify(input.toolResponse ?? '').matchAll(/\[op:([\w-]+)\]/g)].map((m) => m[1]);
 }
 
+/** Tools that change files, across Claude Code, Codex and Cursor. */
+export const isEditTool = (name?: string) =>
+  !!name && /^(Edit|MultiEdit|Write|NotebookEdit|apply_patch|edit_file|write|search_replace|str_replace_based_edit_tool)$/i.test(name);
+
+/** Is this agent working on a task the team can see? */
+function hasClaim(repo: Repo, sessionId: string, session: Session): boolean {
+  const own = new Set(session.ownOps);
+  const ops = readState(repo).ops;
+  if (ops.some((o) => o.kind === 'task' && (own.has(o.id) || o.agent === sessionId))) return true;
+  return [...reduce(ops).values()].some((e) => e.kind === 'task' && e.status === 'open' && e.data.owner === repo.memberId && e.data.status === 'doing');
+}
+
+function claimNudge(repo: Repo): string {
+  const open = [...reduce(readState(repo).ops).values()]
+    .filter((e) => e.kind === 'task' && e.status === 'open' && !e.data.owner && (e.data.status ?? 'todo') === 'todo')
+    .slice(0, 5)
+    .map((e) => `\`${e.key}\` (${String(e.data.title ?? e.key).slice(0, 60)})`);
+  const pick = open.length ? ` Unclaimed tasks: ${open.join(', ')}.` : '';
+  return `[hivemind] You're about to change files, but the shared plan shows no task in progress for you, so teammates can't see what you're working on. Claim it now with task_claim (an existing task's key, or a new key + title).${pick}`;
+}
+
+const CHECK_GRACE_MS = 3 * 60_000;
+
+/** After a turn that changed files: did anything (the agent or the extractor) record it in the plan? */
+function updateNudge(repo: Repo, sessionId: string, session: Session): string {
+  const check = session.pendingCheck;
+  if (!check) return '';
+  // Give the background extractor time to finish before judging.
+  if (isExtracting(repo, sessionId) && Date.now() - check.at < CHECK_GRACE_MS) return '';
+  delete session.pendingCheck;
+  const own = new Set(session.ownOps);
+  const published = readState(repo).ops.some((o) => (own.has(o.id) || o.agent === sessionId) && o.ts >= check.since);
+  if (published || lastReviewed(repo, sessionId) >= check.at) return '';
+  const files = check.files.slice(0, 4).join(', ') + (check.files.length > 4 ? ` and ${check.files.length - 4} more` : '');
+  return `[hivemind] Your last turn changed ${files}, but the shared plan wasn't updated. Update your task (task_update with status/note), and publish any API, schema or decision changes teammates depend on.`;
+}
+
 function touchedFiles(repo: Repo, input: HookInput): string[] {
   const i = input.toolInput ?? {};
   const candidates = [i.file_path, i.path, i.notebook_path, i.target_file].filter((p): p is string => typeof p === 'string');
@@ -131,23 +169,45 @@ export function handleEvent(repo: Repo, input: HookInput, agent = 'claude'): str
     return event === 'Stop' ? '' : context;
   }
   const session: Session = existing;
+  const parts: string[] = [];
+
+  if (event === 'PreToolUse') {
+    // Nudge 1: before the first edit, make sure teammates can see what this agent is working on.
+    if (isEditTool(input.toolName) && !session.nudgedClaim && !hasClaim(repo, sessionId, session)) {
+      session.nudgedClaim = true;
+      parts.push(claimNudge(repo));
+    }
+  }
 
   if (event === 'PostToolUse') {
     session.ownOps.push(...ownOpIds(input));
-    for (const f of touchedFiles(repo, input)) if (!session.touched.includes(f)) session.touched.push(f);
+    const files = touchedFiles(repo, input);
+    for (const f of files) if (!session.touched.includes(f)) session.touched.push(f);
+    if (isEditTool(input.toolName)) session.turnEdits = [...new Set([...(session.turnEdits ?? []), ...(files.length ? files : [input.toolName!])])];
   }
 
-  let context = '';
   if (event === 'UserPromptSubmit' || event === 'PostToolUse') {
+    // Nudge 2: the previous turn changed files and nothing recorded it.
+    parts.push(updateNudge(repo, sessionId, session));
     const state = readState(repo);
     const own = new Set(session.ownOps);
-    context = formatDiff(state.ops, session.lastSeq, { isOwn: (o) => own.has(o.id) || o.agent === sessionId, touched: session.touched });
+    parts.push(formatDiff(state.ops, session.lastSeq, { isOwn: (o) => own.has(o.id) || o.agent === sessionId, touched: session.touched }));
     session.lastSeq = state.seq;
+  }
+  if (event === 'UserPromptSubmit') {
+    session.turnStartedAt = Date.now();
+    session.turnEdits = [];
+  }
+  if (event === 'Stop') {
+    if (session.turnEdits?.length) {
+      session.pendingCheck = { since: session.turnStartedAt ?? session.startedAt, files: session.turnEdits, at: Date.now() };
+    }
+    session.turnEdits = [];
   }
   saveSession(repo, sessionId, session);
 
   if (event === 'Stop' && input.transcript && !process.env.HIVEMIND_NO_EXTRACT) spawnExtract(repo, agent, sessionId, input.transcript);
-  return context;
+  return parts.filter(Boolean).join('\n\n');
 }
 
 function readStdin(): Promise<string> {
