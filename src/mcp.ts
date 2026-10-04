@@ -8,7 +8,7 @@ import { ensureDaemon } from './daemon.js';
 import { findRepo, type Repo } from './git.js';
 import { readState, touchActivity, writeOps, type NewOp } from './store.js';
 
-const VERSION = '0.1.0';
+const VERSION = '0.1.1';
 
 type Reply = { content: { type: 'text'; text: string }[]; isError?: boolean };
 const text = (t: string, isError = false): Reply => ({ content: [{ type: 'text', text: t }], ...(isError ? { isError } : {}) });

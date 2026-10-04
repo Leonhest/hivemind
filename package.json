@@ -1,6 +1,6 @@
 {
   "name": "hivemind-agents",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "A shared, live plan for teams of coding agents (Claude Code, Codex, Cursor). Syncs through your git remote: no server, no account.",
   "keywords": [
     "claude-code",
@@ -35,7 +35,7 @@
     "darwin",
     "linux"
   ],
-  "mcpName": "io.github.leonhest/hivemind",
+  "mcpName": "io.github.Leonhest/hivemind",
   "scripts": {
     "build": "node build.mjs",
     "typecheck": "tsc --noEmit",
