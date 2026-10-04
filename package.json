@@ -1,0 +1,31 @@
+{
+  "name": "hivemind-agents",
+  "version": "0.1.0",
+  "description": "A shared, always-current plan for teams of coding agents. Syncs over your git remote.",
+  "type": "module",
+  "bin": {
+    "hivemind": "dist/hivemind.mjs"
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "node build.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.0",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.4",
+    "esbuild": "^0.28.2",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.3"
+  }
+}
