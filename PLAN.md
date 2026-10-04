@@ -163,8 +163,12 @@ daemon push/fetch back off independently (members without push access still rece
 (`npm pack`: 205 kB, 4 files), Claude Code plugin + marketplace (validated, verified in a live session via
 `--plugin-dir`), MCP registry `server.json`, CI workflow, `examples/demo.sh` (2 agents, local remote, ~1 min).
 First session in a fresh clone now fetches once so the agent starts with the real plan.
-Remaining (outward-facing): create public GitHub repo, `npm publish`, `mcp-publisher publish`,
-record the demo GIF, dogfood at next hackathon.
+**Launched 2026-10-04:** public repo github.com/Leonhest/hivemind (CI green), npm `hivemind-agents@0.1.0`
+(verified `npx hivemind-agents install` from the registry), Claude Code plugin marketplace live.
+Soak test: 20 min of 3s fetches against GitHub → no rate limiting (only failures were a local DNS outage).
+Releasing: the npm account uses passkey 2FA (npm no longer allows new TOTP), so publish with
+`npx npm@latest stage publish --access public`, then approve under Staged Packages on npmjs.com.
+Remaining: MCP registry (`mcp-publisher publish`), demo GIF, live Cursor test, GitLab test, dogfood.
 
 ## Risks
 | Risk                                   | Mitigation                                              |
