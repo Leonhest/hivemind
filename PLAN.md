@@ -159,8 +159,12 @@ dashboard (local, token-protected add form); `hivemind doctor`; `status` with la
 daemon push/fetch back off independently (members without push access still receive updates);
 `hivemind add` for humans.
 
-**Phase 5 — Launch:** README + 3-terminal demo GIF, MCP registry, Claude Code plugin marketplace,
-dogfood at next hackathon.
+**Phase 5 — Launch: PREPARED (publishing awaits approval)** README, MIT license, npm metadata
+(`npm pack`: 205 kB, 4 files), Claude Code plugin + marketplace (validated, verified in a live session via
+`--plugin-dir`), MCP registry `server.json`, CI workflow, `examples/demo.sh` (2 agents, local remote, ~1 min).
+First session in a fresh clone now fetches once so the agent starts with the real plan.
+Remaining (outward-facing): create public GitHub repo, `npm publish`, `mcp-publisher publish`,
+record the demo GIF, dogfood at next hackathon.
 
 ## Risks
 | Risk                                   | Mitigation                                              |

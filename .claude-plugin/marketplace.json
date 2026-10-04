@@ -1,0 +1,14 @@
+{
+  "name": "hivemind",
+  "description": "hivemind: a shared, live plan for teams of coding agents.",
+  "owner": {
+    "name": "Leonhest"
+  },
+  "plugins": [
+    {
+      "name": "hivemind",
+      "source": "./plugin",
+      "description": "A shared, live plan for teams of coding agents, synced through your git remote."
+    }
+  ]
+}

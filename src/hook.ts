@@ -1,10 +1,11 @@
+import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { formatDiff, formatSummary } from './core/format.js';
-import { ensureDaemon } from './daemon.js';
+import { ensureDaemon, readSyncStatus } from './daemon.js';
 import { spawnExtract } from './extract.js';
-import { findRepo, type Repo } from './git.js';
+import { FETCH_REFSPEC, findRepo, type Repo } from './git.js';
 import { log } from './log.js';
-import { loadSession, readState, saveSession, touchActivity, type Session } from './store.js';
+import { loadSession, readState, rebuild, saveSession, touchActivity, type Session } from './store.js';
 
 export type HookEvent = 'SessionStart' | 'UserPromptSubmit' | 'PostToolUse' | 'Stop';
 
@@ -94,7 +95,22 @@ function touchedFiles(repo: Repo, input: HookInput): string[] {
   return candidates.map((p) => path.relative(repo.root, path.resolve(repo.root, p))).filter((p) => !p.startsWith('..'));
 }
 
+/** A clone that has never synced would show an empty plan; fetch once, briefly, before the first summary. */
+function firstSync(repo: Repo): void {
+  if (readSyncStatus(repo).lastFetch) return;
+  try {
+    execFileSync('git', ['fetch', '-q', '--no-tags', 'origin', FETCH_REFSPEC], {
+      cwd: repo.root,
+      timeout: 3_000,
+      stdio: 'ignore',
+      env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+    });
+    rebuild(repo);
+  } catch {}
+}
+
 function startSession(repo: Repo, sessionId: string): string {
+  firstSync(repo);
   const state = readState(repo);
   saveSession(repo, sessionId, { lastSeq: state.seq, ownOps: [], touched: [], startedAt: Date.now() });
   return `${INTRO}\n\nCurrent shared plan (you are ${repo.memberId}):\n${formatSummary(state.ops, SUMMARY_CHARS)}`;

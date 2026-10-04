@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "hivemind": {
+      "command": "node",
+      "args": [
+        "${CLAUDE_PLUGIN_ROOT}/dist/hivemind.mjs",
+        "mcp"
+      ]
+    }
+  }
+}

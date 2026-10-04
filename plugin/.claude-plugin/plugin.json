@@ -1,0 +1,9 @@
+{
+  "name": "hivemind",
+  "version": "0.1.0",
+  "description": "A shared, live plan for teams of coding agents. Teammates' API contracts, decisions and task claims reach your agent at its next tool call. Syncs through your git remote: no server, no account.",
+  "author": { "name": "Leonhest" },
+  "homepage": "https://github.com/Leonhest/hivemind",
+  "license": "MIT",
+  "keywords": ["collaboration", "team", "planning", "multi-agent", "git"]
+}

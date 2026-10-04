@@ -1,7 +1,26 @@
 {
   "name": "hivemind-agents",
   "version": "0.1.0",
-  "description": "A shared, always-current plan for teams of coding agents. Syncs over your git remote.",
+  "description": "A shared, live plan for teams of coding agents (Claude Code, Codex, Cursor). Syncs through your git remote: no server, no account.",
+  "keywords": [
+    "claude-code",
+    "codex",
+    "cursor",
+    "mcp",
+    "multi-agent",
+    "collaboration",
+    "hackathon",
+    "planning",
+    "git"
+  ],
+  "homepage": "https://github.com/Leonhest/hivemind#readme",
+  "bugs": "https://github.com/Leonhest/hivemind/issues",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Leonhest/hivemind.git"
+  },
+  "license": "MIT",
+  "author": "Leonhest",
   "type": "module",
   "bin": {
     "hivemind": "dist/hivemind.mjs"
@@ -12,12 +31,17 @@
   "engines": {
     "node": ">=20"
   },
+  "os": [
+    "darwin",
+    "linux"
+  ],
+  "mcpName": "io.github.leonhest/hivemind",
   "scripts": {
     "build": "node build.mjs",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "prepublishOnly": "npm run typecheck && npm run build && npm test"
   },
-  "license": "MIT",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.0",
     "zod": "^4.6.5"
