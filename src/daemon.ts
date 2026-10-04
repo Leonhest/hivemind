@@ -1,9 +1,10 @@
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { FETCH_REFSPEC, REMOTE_PREFIX, git, gitAsync, tryGit, type Repo } from './git.js';
+import { FETCH_REFSPEC, REMOTE_PREFIX, git, gitAsync, isEnabled, tryGit, type Repo } from './git.js';
 import { log } from './log.js';
 import { lastActivity, rebuild } from './store.js';
+import { refreshVisibility } from './visibility.js';
 
 const ACTIVE_FETCH_MS = Number(process.env.HIVEMIND_FETCH_MS ?? 3_000);
 const IDLE_FETCH_MS = 30_000;
@@ -94,7 +95,16 @@ export async function runDaemon(repo: Repo): Promise<void> {
     recordSync(repo, { lastError: `${what}: ${(err as Error).message.slice(0, 500)}`, lastErrorAt: Date.now() });
   };
 
+  let lastVisibilityCheck = 0;
   for (;;) {
+    if (!isEnabled(repo.root)) {
+      log(repo, 'daemon exiting: hivemind disabled for this clone');
+      return;
+    }
+    if (Date.now() - lastVisibilityCheck > 60 * 60_000) {
+      lastVisibilityCheck = Date.now();
+      refreshVisibility(repo).catch(() => {});
+    }
     const idleFor = Date.now() - lastActivity(repo);
     if (idleFor > EXIT_AFTER_IDLE_MS) {
       log(repo, 'daemon exiting: idle');

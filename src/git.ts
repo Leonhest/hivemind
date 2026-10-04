@@ -48,11 +48,15 @@ export const FETCH_REFSPEC = `+${LOCAL_PREFIX}*:${REMOTE_PREFIX}*`;
 
 const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 32) || 'member';
 
-/** The repo containing `cwd`, or null if hivemind should stay out of the way (no git repo or no origin remote). */
-export function findRepo(cwd: string): Repo | null {
+/**
+ * The repo containing `cwd`, or null if hivemind should stay out of the way:
+ * no git repo, no origin remote, or turned off with `hivemind disable` (unless includeDisabled).
+ */
+export function findRepo(cwd: string, opts: { includeDisabled?: boolean } = {}): Repo | null {
   const root = tryGit(cwd, ['rev-parse', '--show-toplevel']);
   if (!root) return null;
   if (!tryGit(root, ['remote', 'get-url', 'origin'])) return null;
+  if (!opts.includeDisabled && !isEnabled(root)) return null;
   const commonDir = path.resolve(root, git(root, ['rev-parse', '--git-common-dir']));
   const who = tryGit(root, ['config', 'user.email'])?.split('@')[0] ?? tryGit(root, ['config', 'user.name']) ?? os.userInfo().username;
   // Include the clone path so two clones on one machine are distinct members.
@@ -84,4 +88,19 @@ export function appendToOwnRef(repo: Repo, lines: string[]): void {
   const tree = git(repo.root, ['mktree'], `100644 blob ${blob}\tops.jsonl\n`);
   const commit = git(repo.root, ['commit-tree', tree, ...(prev ? ['-p', prev] : []), '-m', 'hivemind']);
   git(repo.root, ['update-ref', repo.ownRef, commit, ...(prev ? [prev] : [])]);
+}
+
+// --- per-clone on/off switch (stored in .git/config, never shared) ---
+
+export const isEnabled = (root: string) => tryGit(root, ['config', '--bool', 'hivemind.enabled']) !== 'false';
+
+export function setEnabled(repo: Repo, enabled: boolean): void {
+  if (enabled) tryGit(repo.root, ['config', '--unset', 'hivemind.enabled']);
+  else git(repo.root, ['config', '--bool', 'hivemind.enabled', 'false']);
+}
+
+/** owner/name for GitHub remotes (https or ssh), else null. */
+export function githubSlug(remoteUrl: string): string | null {
+  const m = remoteUrl.trim().match(/github\.com[:/]([^/]+)\/([^/]+?)(?:\.git)?\/?$/);
+  return m ? `${m[1]}/${m[2]}` : null;
 }

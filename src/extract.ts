@@ -30,6 +30,7 @@ Rules:
 - Prefer a few high-value entries. An empty list is a good answer when nothing qualifies.
 - evidence: a short verbatim quote from the transcript supporting the entry.
 - areas: repo-relative files or directories the entry concerns (for tasks: what this agent is changing).
+- NEVER include credentials, tokens, keys, passwords, personal details (emails, phone numbers, real names other than member ids), customer or company names that aren't part of the product, or unfixed security vulnerabilities. Describe the work generically instead (e.g. "hardening auth checks"), or leave it out.
 - Use null for fields that don't apply.`;
 
 const nullable = (type: string, extra: object = {}) => ({ type: [type, 'null'], ...extra });

@@ -7,13 +7,14 @@ import { KINDS, type Kind } from './core/types.js';
 import { ensureDaemon } from './daemon.js';
 import { findRepo, type Repo } from './git.js';
 import { readState, touchActivity, writeOps, type NewOp } from './store.js';
+import { PUBLIC_NOTICE, readVisibility } from './visibility.js';
 
-const VERSION = '0.1.2';
+const VERSION = '0.1.3';
 
 type Reply = { content: { type: 'text'; text: string }[]; isError?: boolean };
 const text = (t: string, isError = false): Reply => ({ content: [{ type: 'text', text: t }], ...(isError ? { isError } : {}) });
 
-const NOT_A_REPO = 'hivemind is inactive here: not inside a git repository with an "origin" remote.';
+const NOT_A_REPO = 'hivemind is inactive here: not inside a git repository with an "origin" remote, or turned off with hivemind disable.';
 const PROPAGATES = "Teammates' agents will see it at their next tool call.";
 
 export async function runMcp(): Promise<void> {
@@ -45,7 +46,8 @@ export async function runMcp(): Promise<void> {
       if (!r) return text(NOT_A_REPO, true);
       touchActivity(r);
       const ops = readState(r).ops.filter((o) => !kind || o.kind === kind);
-      return text(`You are ${r.memberId}.\n${formatSummary(ops)}`);
+      const notice = readVisibility(r)?.public ? `${PUBLIC_NOTICE}\n` : '';
+      return text(`${notice}You are ${r.memberId}.\n${formatSummary(ops)}`);
     },
   );
 

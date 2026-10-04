@@ -5,6 +5,7 @@ import { ensureDaemon, readSyncStatus } from './daemon.js';
 import { spawnExtract } from './extract.js';
 import { FETCH_REFSPEC, findRepo, type Repo } from './git.js';
 import { log } from './log.js';
+import { PUBLIC_NOTICE, readVisibility, refreshVisibility } from './visibility.js';
 import { loadSession, readState, rebuild, saveSession, touchActivity, type Session } from './store.js';
 
 export type HookEvent = 'SessionStart' | 'UserPromptSubmit' | 'PostToolUse' | 'Stop';
@@ -79,7 +80,7 @@ export const ADAPTERS: Record<string, Adapter> = {
 };
 
 const INTRO = `[hivemind] This repo shares a live plan with teammates' coding agents on other machines (synced through git). Teammates' changes appear in your context automatically, and the plan is updated automatically from your work.
-For anything other agents build against — API routes, schemas, shared types, file ownership — or project-wide decisions, publish it right away with the hivemind MCP tools (contract_publish, decision_log, task_claim, task_update) so teammates don't wait. Mark incompatible contract changes breaking=true.`;
+For anything other agents build against — API routes, schemas, shared types, file ownership — or project-wide decisions, publish it right away with the hivemind MCP tools (contract_publish, decision_log, task_claim, task_update) so teammates don't wait. Mark incompatible contract changes breaking=true. Never put credentials, personal details or unfixed security issues in the plan.`;
 
 const SUMMARY_CHARS = 3200;
 
@@ -113,7 +114,8 @@ function startSession(repo: Repo, sessionId: string): string {
   firstSync(repo);
   const state = readState(repo);
   saveSession(repo, sessionId, { lastSeq: state.seq, ownOps: [], touched: [], startedAt: Date.now() });
-  return `${INTRO}\n\nCurrent shared plan (you are ${repo.memberId}):\n${formatSummary(state.ops, SUMMARY_CHARS)}`;
+  const notice = readVisibility(repo)?.public ? `\n${PUBLIC_NOTICE}` : '';
+  return `${INTRO}${notice}\n\nCurrent shared plan (you are ${repo.memberId}):\n${formatSummary(state.ops, SUMMARY_CHARS)}`;
 }
 
 /** Returns the text to inject into the agent's context, or '' for nothing. */
@@ -179,6 +181,10 @@ export async function runHook(agentName: string, rawEvent: string): Promise<void
     if (!input) return done(fallback);
     repo = findRepo(input.cwd ?? process.cwd());
     if (!repo) return done(adapter.render(input.event, ''));
+    // First session in a clone: learn whether the repo is public before showing the plan (bounded wait).
+    if (input.event === 'SessionStart' && !readVisibility(repo)) {
+      await Promise.race([refreshVisibility(repo).catch(() => {}), new Promise((r) => setTimeout(r, 1_500))]);
+    }
     done(adapter.render(input.event, handleEvent(repo, input, agentName)));
   } catch (err) {
     log(repo, `hook ${agentName} ${rawEvent} failed: ${(err as Error).stack ?? err}`);

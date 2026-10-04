@@ -1,6 +1,7 @@
 import { formatSummary } from './core/format.js';
 import { daemonPid, ensureDaemon, readSyncStatus, runDaemon } from './daemon.js';
-import { findRepo, FETCH_REFSPEC, gitAsync, tryGit, LOCAL_PREFIX, readRefs, REMOTE_PREFIX } from './git.js';
+import { findRepo, FETCH_REFSPEC, gitAsync, isEnabled, setEnabled, tryGit, LOCAL_PREFIX, readRefs, REMOTE_PREFIX } from './git.js';
+import { readVisibility } from './visibility.js';
 import { runHook } from './hook.js';
 import { KINDS, type Kind } from './core/types.js';
 import { readState, rebuild, touchActivity, writeOps } from './store.js';
@@ -12,6 +13,7 @@ const USAGE = `hivemind — a shared, live plan for teams of coding agents
   hivemind status       show sync state for the current repo
   hivemind open         live dashboard in your browser
   hivemind doctor       check that everything is wired up
+  hivemind disable      turn hivemind off for this clone (enable to turn it back on)
   hivemind plan         print the shared plan for the current repo
   hivemind sync         push + fetch right now
   hivemind add <kind> <key> <text> [--breaking]
@@ -84,20 +86,43 @@ async function main(): Promise<void> {
       return (await import('./dashboard.js')).runDashboard(requireRepo(), args);
     case 'doctor':
       return (await import('./doctor.js')).runDoctor();
+    case 'disable':
+    case 'enable': {
+      const repo = findRepo(process.cwd(), { includeDisabled: true });
+      if (!repo) {
+        console.error('Not inside a git repository with an "origin" remote.');
+        process.exit(1);
+      }
+      setEnabled(repo, cmd === 'enable');
+      if (cmd === 'disable') {
+        const pid = daemonPid(repo);
+        if (pid) process.kill(pid, 'SIGTERM');
+        console.log(`hivemind is off for this clone (${repo.root}). Nothing is read or shared here until you run: hivemind enable`);
+      } else console.log(`hivemind is on for this clone (${repo.root}).`);
+      return;
+    }
     case 'status': {
-      const repo = requireRepo();
+      const repo = findRepo(process.cwd(), { includeDisabled: true });
+      if (repo && !isEnabled(repo.root)) {
+        console.log(`hivemind is disabled for this clone (${repo.root}). Turn it back on with: hivemind enable`);
+        return;
+      }
+      if (!repo) requireRepo();
+      if (!repo) return;
       const state = readState(repo);
       const members = new Set(Object.keys(readRefs(repo)).map((r) => r.replace(REMOTE_PREFIX, '').replace(LOCAL_PREFIX, '')));
       const pid = daemonPid(repo);
       const sync = readSyncStatus(repo);
       const ago = (ts?: number) => (ts ? `${Math.round((Date.now() - ts) / 1000)}s ago` : 'never');
+      const vis = readVisibility(repo)?.public;
+      const visibility = vis ? '\nvisible: PUBLIC repo, so the plan is publicly readable (turn off here with: hivemind disable)' : vis === false ? '\nvisible: private (repo members only)' : '';
       const err = sync.lastErrorAt && sync.lastErrorAt > (sync.lastFetch ?? 0) ? `\nerror:   ${sync.lastError}` : '';
       console.log(`repo:    ${repo.root}
 you:     ${repo.memberId}
 members: ${[...members].join(', ') || '(none yet)'}
 ops:     ${state.ops.length}
 daemon:  ${pid ? `running (pid ${pid})` : 'stopped (starts automatically with your agent)'}
-synced:  fetched ${ago(sync.lastFetch)}, pushed ${ago(sync.lastPush)}${err}`);
+synced:  fetched ${ago(sync.lastFetch)}, pushed ${ago(sync.lastPush)}${err}${visibility}`);
       return;
     }
     case 'start': // undocumented helper for tests

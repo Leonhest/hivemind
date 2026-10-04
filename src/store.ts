@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { compareOps } from './core/plan.js';
+import { redact, redactDeep } from './core/redact.js';
 import { KINDS, type Kind, type Op, type State, type StoredOp } from './core/types.js';
 import { appendToOwnRef, readOpsFile, readRefs, type Repo } from './git.js';
 
@@ -115,10 +116,10 @@ export function writeOps(repo: Repo, inputs: NewOp[]): Op[] {
       ts: Date.now(),
       type: i.type ?? 'upsert',
       kind: i.kind,
-      key: i.key,
-      data: i.data ?? {},
+      key: redact(i.key),
+      data: redactDeep(i.data ?? {}),
       source: i.source ?? 'explicit',
-      ...(i.evidence ? { evidence: i.evidence } : {}),
+      ...(i.evidence ? { evidence: redact(i.evidence) } : {}),
     }));
     appendToOwnRef(repo, ops.map((o) => JSON.stringify(o)));
     return ops;

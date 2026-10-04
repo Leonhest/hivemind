@@ -79,6 +79,7 @@ hivemind plan         print the shared plan
 hivemind open         live dashboard in your browser (and a form to add to the plan)
 hivemind add <goal|task|contract|decision|question> <key> <text> [--breaking]
 hivemind doctor       check that everything is wired up
+hivemind disable      turn hivemind off for this clone (hivemind enable to undo)
 hivemind uninstall    remove hooks and MCP config (your repos' plan data is left alone)
 ```
 
@@ -86,6 +87,12 @@ hivemind uninstall    remove hooks and MCP config (your repos' plan data is left
 
 - **Your plan data never leaves your git host.** There's no hivemind server. Anyone with read
   access to the repo can read its plan refs, the same people who can read the code.
+- **Public repo = public plan.** hivemind detects public GitHub repos and tells your agent (and
+  `hivemind status`) so nobody is surprised. Don't want that? `hivemind disable` turns it off for
+  that clone; `hivemind enable` turns it back on.
+- **Secrets are scrubbed.** Every plan entry is checked for keys, tokens, passwords and connection-string
+  credentials before it's written, and the extractor is instructed to leave out credentials, personal
+  details, customer names and unfixed security issues.
 - **Extraction runs on your machine with your own agent login.** It calls `claude -p` with Haiku
   (or `codex exec` if you only have Codex) using your existing subscription or API key: about
   $0.005 per extraction on API pricing, or a small slice of your subscription usage. Set
