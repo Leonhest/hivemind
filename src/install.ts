@@ -321,7 +321,18 @@ function selected(args: string[]): Integration[] {
   return Object.values(INTEGRATIONS).filter((i) => i.detected());
 }
 
+/** A test run must never reach the real ~/.claude, ~/.codex or ~/.cursor. */
+function guardTestRun(): void {
+  if (!process.env.VITEST) return;
+  const real = os.userInfo().homedir;
+  const dirs = [claudeDir(), codexDir(), cursorDir(), hivemindHome()];
+  if (dirs.some((d) => path.resolve(d).startsWith(path.join(real, '.')))) {
+    throw new Error(`refusing to modify real agent configs during tests (${dirs.join(', ')})`);
+  }
+}
+
 export function install(args: string[] = []): void {
+  guardTestRun();
   // Copy the single-file bundle somewhere stable: npx caches are temporary.
   writeLauncher();
   const reachable = linkOntoPath();
@@ -347,6 +358,7 @@ with everyone else on that repo who has hivemind installed. Check it any time wi
 }
 
 export function uninstall(args: string[] = []): void {
+  guardTestRun();
   const targets = args.some((a) => a.startsWith('--only=')) ? selected(args) : Object.values(INTEGRATIONS);
   for (const t of targets) {
     try {
