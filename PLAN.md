@@ -139,7 +139,11 @@ Verified: 13 unit/integration tests; real end-to-end via GitHub — agent B rece
 contract change mid-task (A published at ~+7s, B saw it at its next tool call); install is idempotent and
 preserves existing user hooks/permissions; uninstall restores them.
 
-**Phase 2 — Passive extraction (1–2 days).** ✅ Plan updates with no tool calls.
+**Phase 2 — Passive extraction: DONE ✅** Stop hook → detached extractor reads only the new transcript
+segment (Claude Code + Codex formats, generic fallback), skips non-substantive segments, calls Haiku with the
+current plan for dedupe, filters by confidence, never steals a teammate's task, tags ops `inferred` + evidence.
+Verified via GitHub: agent A wrote a login API without touching hivemind tools; ~10s after A stopped,
+agent B received the inferred `POST /api/login` contract, the cookie decision and A's task mid-task.
 
 **Phase 3 — Cursor + Codex adapters (1–2 days).** ✅ Mixed-agent team stays in sync.
 

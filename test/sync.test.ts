@@ -46,40 +46,41 @@ describe('git sync', () => {
   });
 
   it('propagates a contract change from one agent to another agent’s next tool call', () => {
-    const bobCtx = handleEvent(bob, 'SessionStart', { session_id: 'b1' });
+    const bobCtx = handleEvent(bob, { event: 'SessionStart', sessionId: 'b1' });
     expect(bobCtx).toContain('The shared plan is empty.');
 
     writeOps(alice, [{ kind: 'contract', key: 'User.id', data: { spec: 'int' } }]);
     sync(alice);
     fetch(bob);
-    expect(handleEvent(bob, 'PostToolUse', { session_id: 'b1', tool_name: 'Bash' })).toContain('added contract: `User.id`: int');
+    expect(handleEvent(bob, { event: 'PostToolUse', sessionId: 'b1', toolName: 'Bash' })).toContain('added contract: `User.id`: int');
 
     writeOps(alice, [{ kind: 'contract', key: 'User.id', data: { spec: 'uuid', breaking: true } }]);
     sync(alice);
     fetch(bob);
-    const ctx = handleEvent(bob, 'PostToolUse', { session_id: 'b1', tool_name: 'Bash' });
+    const ctx = handleEvent(bob, { event: 'PostToolUse', sessionId: 'b1', toolName: 'Bash' });
     expect(ctx).toContain('⚠️ BREAKING');
     expect(ctx).toContain('(was: int)');
 
     // Already delivered: nothing new on the next call.
-    expect(handleEvent(bob, 'PostToolUse', { session_id: 'b1', tool_name: 'Bash' })).toBe('');
+    expect(handleEvent(bob, { event: 'PostToolUse', sessionId: 'b1', toolName: 'Bash' })).toBe('');
   });
 
   it('does not echo an agent’s own MCP writes back to it', () => {
-    handleEvent(alice, 'SessionStart', { session_id: 'a1' });
+    handleEvent(alice, { event: 'SessionStart', sessionId: 'a1' });
     const [mine] = writeOps(alice, [{ kind: 'decision', key: 'db', data: { text: 'SQLite' } }]);
-    const ctx = handleEvent(alice, 'PostToolUse', {
-      session_id: 'a1',
-      tool_name: 'mcp__hivemind__decision_log',
-      tool_response: [{ type: 'text', text: `Logged decision "db". [op:${mine.id}]` }],
+    const ctx = handleEvent(alice, {
+      event: 'PostToolUse',
+      sessionId: 'a1',
+      toolName: 'mcp__hivemind__decision_log',
+      toolResponse: [{ type: 'text', text: `Logged decision "db". [op:${mine.id}]` }],
     });
     expect(ctx).toBe('');
   });
 
   it('shows a second session on the same clone the first session’s writes', () => {
-    handleEvent(alice, 'SessionStart', { session_id: 'a2' });
+    handleEvent(alice, { event: 'SessionStart', sessionId: 'a2' });
     writeOps(alice, [{ kind: 'task', key: 'signup', data: { title: 'Signup', status: 'doing' } }]);
-    expect(handleEvent(alice, 'UserPromptSubmit', { session_id: 'a2' })).toContain('added task: [doing] Signup');
+    expect(handleEvent(alice, { event: 'UserPromptSubmit', sessionId: 'a2' })).toContain('added task: [doing] Signup');
   });
 
   it('converges when both members write concurrently', () => {
@@ -96,6 +97,16 @@ describe('git sync', () => {
   it('never touches branches or the working tree', () => {
     expect(git(alice.root, ['status', '--porcelain'])).toBe('');
     expect(git(alice.root, ['branch', '-a'])).not.toContain('hivemind');
+  });
+});
+
+describe('extracted ops', () => {
+  it('are not echoed to the session that produced them, but reach others', () => {
+    handleEvent(alice, { event: 'SessionStart', sessionId: 'a3' });
+    handleEvent(alice, { event: 'SessionStart', sessionId: 'a4' });
+    writeOps(alice, [{ kind: 'decision', key: 'orm', data: { text: 'Drizzle' }, source: 'inferred', agent: 'a3' }]);
+    expect(handleEvent(alice, { event: 'PostToolUse', sessionId: 'a3', toolName: 'Bash' })).toBe('');
+    expect(handleEvent(alice, { event: 'PostToolUse', sessionId: 'a4', toolName: 'Bash' })).toContain('Drizzle [inferred]');
   });
 });
 

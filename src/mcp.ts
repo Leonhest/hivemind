@@ -20,7 +20,8 @@ export async function runMcp(): Promise<void> {
   const server = new McpServer({ name: 'hivemind', version: VERSION });
 
   // Resolved per call: the server may be started before the repo has a remote.
-  const repo = (): Repo | null => findRepo(process.cwd());
+  // Cursor starts MCP servers outside the project, so its config passes the workspace in HIVEMIND_CWD.
+  const repo = (): Repo | null => findRepo(process.env.HIVEMIND_CWD || process.cwd());
 
   const publish = (op: NewOp, message: string): Reply => {
     const r = repo();

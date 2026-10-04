@@ -43,7 +43,7 @@ describe('formatDiff', () => {
   ]);
 
   it('reports only changes after lastSeq, breaking first, with the previous spec', () => {
-    const diff = formatDiff(ops, 1, new Set());
+    const diff = formatDiff(ops, 1);
     const lines = diff.split('\n');
     expect(lines[1]).toBe('⚠️ BREAKING bob updated contract: `User.id`: uuid (breaking) (was: int)');
     expect(lines[2]).toContain('carol added task');
@@ -51,15 +51,35 @@ describe('formatDiff', () => {
   });
 
   it('skips the session’s own ops and returns empty when nothing is new', () => {
-    expect(formatDiff(ops, 1, new Set([ops[1].id, ops[2].id]))).toBe('');
-    expect(formatDiff(ops, 3, new Set())).toBe('');
+    expect(formatDiff(ops, 1, { isOwn: (o) => o.id === ops[1].id || o.id === ops[2].id })).toBe('');
+    expect(formatDiff(ops, 3)).toBe('');
   });
 
   it('respects the size cap', () => {
     const many = stored(Array.from({ length: 50 }, (_, i) => op({ kind: 'decision', key: `d${i}`, data: { text: 'x'.repeat(100) } })));
-    const diff = formatDiff(many, 0, new Set(), 600);
+    const diff = formatDiff(many, 0, { maxChars: 600 });
     expect(diff.length).toBeLessThan(700);
     expect(diff).toMatch(/more \(call the hivemind plan_get tool\)/);
+  });
+});
+
+describe('relevance', () => {
+  it('ranks changes overlapping touched files first and warns about conflicting claims', () => {
+    const ops = stored([
+      op({ kind: 'decision', key: 'lint', data: { text: 'Use biome' }, member: 'bob' }),
+      op({ kind: 'task', key: 'auth', data: { title: 'Auth', status: 'doing', areas: ['src/api/auth'] }, member: 'carol' }),
+    ]);
+    const diff = formatDiff(ops, 0, { touched: ['src/api/auth/login.ts'] });
+    const lines = diff.split('\n');
+    expect(lines[1]).toMatch(/^🎯 .*carol added task/);
+    expect(diff).toContain('Possible conflict: carol');
+  });
+
+  it('collapses routine task chatter from teammates', () => {
+    const ops = stored(Array.from({ length: 6 }, (_, i) => op({ kind: 'task', key: `t${i}`, data: { title: `T${i}`, status: 'doing' }, member: 'bob' })));
+    const diff = formatDiff(ops, 0);
+    expect(diff).toContain('6 task updates by bob');
+    expect(diff.split('\n')).toHaveLength(2);
   });
 });
 

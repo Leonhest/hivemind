@@ -12,7 +12,7 @@ const USAGE = `hivemind — a shared, live plan for teams of coding agents
   hivemind plan         print the shared plan for the current repo
   hivemind sync         push + fetch right now
 
-internal: hook <agent> <event> | mcp | daemon`;
+internal: hook <agent> <event> | mcp | daemon | extract <agent> <session> <transcript>`;
 
 function requireRepo() {
   const repo = findRepo(process.cwd());
@@ -30,6 +30,11 @@ async function main(): Promise<void> {
       return runHook(args[0] ?? 'claude', args[1] ?? '');
     case 'mcp':
       return (await import('./mcp.js')).runMcp();
+    case 'extract': {
+      const [agent, session, transcript] = args;
+      const repo = requireRepo();
+      return (await import('./extract.js')).runExtract(repo, agent, session, transcript);
+    }
     case 'daemon':
       return runDaemon(requireRepo());
     case 'install':
