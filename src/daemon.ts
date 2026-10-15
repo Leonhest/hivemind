@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { FETCH_REFSPEC, REMOTE_PREFIX, git, gitAsync, isEnabled, tryGit, type Repo } from './git.js';
+import { FETCH_REFSPEC, REMOTE_PREFIX, git, gitAsync, isAncestor, isEnabled, tryGit, type Repo } from './git.js';
 import { log } from './log.js';
 import { lastActivity, rebuild } from './store.js';
 import { refreshVisibility } from './visibility.js';
@@ -75,6 +75,30 @@ function claimPidFile(repo: Repo): boolean {
   return false;
 }
 
+/**
+ * Push this member's ref if the remote doesn't have it yet. Safe to run from several processes
+ * (the daemon and `hivemind sync`): a rejected push whose data is already on the remote, because
+ * the other process pushed it first, is a success, not an error.
+ * Returns 'pushed', 'up-to-date', or throws.
+ */
+export async function pushOwnRef(repo: Repo): Promise<'pushed' | 'up-to-date'> {
+  const remoteOwn = REMOTE_PREFIX + repo.memberId;
+  const local = tryGit(repo.root, ['rev-parse', '-q', '--verify', repo.ownRef]);
+  if (!local || local === tryGit(repo.root, ['rev-parse', '-q', '--verify', remoteOwn])) return 'up-to-date';
+  try {
+    await gitAsync(repo.root, ['push', '-q', 'origin', `${repo.ownRef}:${repo.ownRef}`]);
+  } catch (err) {
+    // Check what the remote has now; only our own data counts as "already done".
+    await gitAsync(repo.root, ['fetch', '-q', '--no-tags', 'origin', `+${repo.ownRef}:${remoteOwn}`]).catch(() => {});
+    const remote = tryGit(repo.root, ['rev-parse', '-q', '--verify', remoteOwn]);
+    if (!remote || (remote !== local && !isAncestor(repo.root, local, remote))) throw err;
+    return 'up-to-date';
+  }
+  git(repo.root, ['update-ref', remoteOwn, local]);
+  recordSync(repo, { lastPush: Date.now() });
+  return 'pushed';
+}
+
 export async function runDaemon(repo: Repo): Promise<void> {
   if (!claimPidFile(repo)) return;
   const release = () => {
@@ -84,7 +108,6 @@ export async function runDaemon(repo: Repo): Promise<void> {
   for (const sig of ['SIGINT', 'SIGTERM'] as const) process.on(sig, () => process.exit(0));
   log(repo, `daemon started pid=${process.pid} member=${repo.memberId}`);
 
-  const remoteOwn = REMOTE_PREFIX + repo.memberId;
   let lastFetch = 0;
   let fetchFailures = 0;
   let pushFailures = 0;
@@ -112,12 +135,9 @@ export async function runDaemon(repo: Repo): Promise<void> {
     }
     // Push whenever our ref is ahead of what the remote is known to have.
     // Failures (e.g. no push access) back off independently, so fetching keeps working.
-    const local = tryGit(repo.root, ['rev-parse', '-q', '--verify', repo.ownRef]);
-    if (local && Date.now() >= nextPushAt && local !== tryGit(repo.root, ['rev-parse', '-q', '--verify', remoteOwn])) {
+    if (Date.now() >= nextPushAt) {
       try {
-        await gitAsync(repo.root, ['push', '-q', 'origin', `${repo.ownRef}:${repo.ownRef}`]);
-        git(repo.root, ['update-ref', remoteOwn, local]);
-        recordSync(repo, { lastPush: Date.now() });
+        await pushOwnRef(repo);
         pushFailures = 0;
       } catch (err) {
         fail('push', err, ++pushFailures);

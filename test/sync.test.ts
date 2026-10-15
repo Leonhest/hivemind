@@ -120,3 +120,32 @@ describe('untrusted input', () => {
     expect(before).toBeGreaterThan(0);
   });
 });
+
+describe('pushOwnRef', () => {
+  it('pushes once, then reports up-to-date; a push rejected because another process already pushed the same data is not an error', async () => {
+    const { pushOwnRef } = await import('../src/daemon.js');
+    writeOps(alice, [{ kind: 'note', key: 'race', data: { text: 'x' } }]);
+    expect(await pushOwnRef(alice)).toBe('pushed');
+    expect(await pushOwnRef(alice)).toBe('up-to-date');
+
+    // Simulate the race: another process pushed our latest commit, but our remote-tracking ref is stale.
+    writeOps(alice, [{ kind: 'note', key: 'race2', data: { text: 'y' } }]);
+    const local = git(alice.root, ['rev-parse', alice.ownRef]);
+    const before = git(alice.root, ['rev-parse', `refs/hivemind-remote/${alice.memberId}`]);
+    git(alice.root, ['push', '-q', 'origin', `${alice.ownRef}:${alice.ownRef}`]);
+    git(alice.root, ['update-ref', `refs/hivemind-remote/${alice.memberId}`, before]);
+    // Make the remote reject our push: point it at a commit that is ahead of ours.
+    const ahead = git(alice.root, ['commit-tree', `${local}^{tree}`, '-p', local, '-m', 'other process']);
+    git(alice.root, ['push', '-q', 'origin', `${ahead}:${alice.ownRef}`]);
+    await expect(pushOwnRef(alice)).resolves.toBe('up-to-date');
+  });
+
+  it('still reports a real failure', async () => {
+    const { pushOwnRef } = await import('../src/daemon.js');
+    writeOps(bob, [{ kind: 'note', key: 'fail', data: { text: 'z' } }]);
+    const url = git(bob.root, ['remote', 'get-url', 'origin']);
+    git(bob.root, ['remote', 'set-url', 'origin', '/nonexistent/remote.git']);
+    await expect(pushOwnRef(bob)).rejects.toThrow();
+    git(bob.root, ['remote', 'set-url', 'origin', url]);
+  });
+});

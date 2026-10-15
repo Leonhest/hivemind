@@ -1,6 +1,6 @@
 import { formatSummary } from './core/format.js';
-import { daemonPid, ensureDaemon, readSyncStatus, runDaemon } from './daemon.js';
-import { findRepo, FETCH_REFSPEC, gitAsync, isEnabled, setEnabled, tryGit, LOCAL_PREFIX, readRefs, REMOTE_PREFIX } from './git.js';
+import { daemonPid, ensureDaemon, pushOwnRef, readSyncStatus, runDaemon } from './daemon.js';
+import { findRepo, FETCH_REFSPEC, gitAsync, isEnabled, setEnabled, LOCAL_PREFIX, readRefs, REMOTE_PREFIX } from './git.js';
 import { readVisibility } from './visibility.js';
 import { runHook } from './hook.js';
 import { KINDS, type Kind } from './core/types.js';
@@ -56,11 +56,10 @@ async function main(): Promise<void> {
     }
     case 'sync': {
       const repo = requireRepo();
-      const own = tryGit(repo.root, ['rev-parse', '-q', '--verify', repo.ownRef]);
-      if (own) await gitAsync(repo.root, ['push', '-q', 'origin', `${repo.ownRef}:${repo.ownRef}`]);
+      const pushed = await pushOwnRef(repo);
       await gitAsync(repo.root, ['fetch', '-q', '--no-tags', 'origin', FETCH_REFSPEC]);
       const state = rebuild(repo);
-      console.log(`synced: ${state.ops.length} ops`);
+      console.log(`synced: ${state.ops.length} ops${pushed === 'pushed' ? ' (your updates pushed)' : ''}`);
       return;
     }
     case 'add': {

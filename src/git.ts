@@ -33,6 +33,16 @@ export function gitAsync(cwd: string, args: string[], timeoutMs = 30_000): Promi
   });
 }
 
+/** Is `ancestor` contained in `descendant`'s history? (Answered by exit code, not output.) */
+export function isAncestor(cwd: string, ancestor: string, descendant: string): boolean {
+  try {
+    git(cwd, ['merge-base', '--is-ancestor', ancestor, descendant]);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export interface Repo {
   root: string;
   /** Shared .git dir (same for all worktrees of a clone). */
