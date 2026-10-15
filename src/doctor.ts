@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import { daemonPid, readSyncStatus } from './daemon.js';
-import { pickBackend } from './extract.js';
+import { backendHealth, pickBackend } from './extract.js';
 import { findRepo, gitAsync, tryGit } from './git.js';
 import { INTEGRATIONS, launcherPath } from './install.js';
 import { readState } from './store.js';
@@ -33,6 +33,10 @@ export async function runDoctor(): Promise<void> {
   }
   if (INTEGRATIONS.codex.detected()) note("Codex only runs new hooks after you approve them once with /hooks inside Codex");
   const backend = pickBackend('claude');
+  const health = backendHealth();
+  for (const [name, h] of Object.entries(health)) {
+    if (h && Date.now() - h.failedAt < 24 * 60 * 60_000) bad(`${name} failed as extraction backend ${ago(h.failedAt)}: ${h.error}`, name === 'claude' ? 'check that `claude -p "hi"` works in a terminal (login, org access); hivemind falls back to codex meanwhile' : 'check that `codex exec "hi"` works in a terminal');
+  }
   backend ? ok(`automatic plan extraction via ${backend}`) : bad('no extractor available (needs claude or codex CLI)', 'plan updates will rely on agents calling the MCP tools');
 
   console.log('\nThis repo');

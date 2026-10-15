@@ -96,6 +96,16 @@ const has = (bin: string) => {
   }
 };
 
+/** The human-readable error from a claude -p JSON result, if it is one. */
+function modelError(out: string): string | null {
+  try {
+    const parsed = JSON.parse(out);
+    return parsed.is_error ? String(parsed.result ?? 'unknown error') : null;
+  } catch {
+    return null;
+  }
+}
+
 const childEnv = () => ({ ...process.env, HIVEMIND_EXTRACTOR: '1' });
 
 function run(bin: string, args: string[], input: string): Promise<string> {
@@ -109,7 +119,8 @@ function run(bin: string, args: string[], input: string): Promise<string> {
     child.on('error', reject);
     child.on('close', (code) => {
       clearTimeout(timer);
-      code === 0 ? resolve(out) : reject(new Error(`${bin} exited ${code}: ${err.slice(0, 500)}`));
+      // claude -p reports errors as JSON on stdout, so include both streams.
+      code === 0 ? resolve(out) : reject(new Error(`${bin} exited ${code}: ${(err.trim() || modelError(out) || out).slice(0, 500)}`));
     });
     child.stdin.end(input);
   });
@@ -133,6 +144,8 @@ async function viaClaude(system: string, schema: object, prompt: string, opts: M
     ],
     prompt,
   );
+  const failure = modelError(out);
+  if (failure) throw new Error(`claude: ${failure}`);
   const parsed = JSON.parse(out);
   if (process.env.HIVEMIND_DEBUG) {
     console.error(`[hivemind] claude: ${parsed.duration_ms}ms (api ${parsed.duration_api_ms}ms), ${parsed.num_turns} turns, in ${parsed.usage?.input_tokens}+${parsed.usage?.cache_read_input_tokens ?? 0} out ${parsed.usage?.output_tokens}`);
@@ -161,13 +174,58 @@ export function askModel(backend: Backend, system: string, schema: object, promp
 
 export type Backend = 'claude' | 'codex';
 
-export function pickBackend(agent: string): Backend | null {
-  const forced = process.env.HIVEMIND_EXTRACTOR_BACKEND;
-  if (forced === 'none') return null;
-  if (forced === 'claude' || forced === 'codex') return forced;
-  const order: Backend[] = agent === 'codex' ? ['codex', 'claude'] : ['claude', 'codex'];
-  return order.find(has) ?? null;
+const healthFile = () => path.join(os.homedir(), '.hivemind', 'backends.json');
+type Health = Partial<Record<Backend, { failedAt: number; error: string }>>;
+const FAILURE_COOLDOWN_MS = 60 * 60_000;
+
+export function backendHealth(): Health {
+  try {
+    return JSON.parse(fs.readFileSync(healthFile(), 'utf8'));
+  } catch {
+    return {};
+  }
 }
+
+function recordHealth(backend: Backend, error: string | null): void {
+  try {
+    const health = backendHealth();
+    if (error) health[backend] = { failedAt: Date.now(), error: error.slice(0, 300) };
+    else delete health[backend];
+    fs.mkdirSync(path.dirname(healthFile()), { recursive: true });
+    fs.writeFileSync(healthFile(), JSON.stringify(health));
+  } catch {}
+}
+
+/** Installed backends in preference order, skipping ones that failed within the last hour. */
+export function backendOrder(agent: string): Backend[] {
+  const forced = process.env.HIVEMIND_EXTRACTOR_BACKEND;
+  if (forced === 'none') return [];
+  if (forced === 'claude' || forced === 'codex') return [forced];
+  const health = backendHealth();
+  const order: Backend[] = agent === 'codex' ? ['codex', 'claude'] : ['claude', 'codex'];
+  const installed = order.filter(has);
+  const healthy = installed.filter((b) => !health[b] || Date.now() - health[b]!.failedAt > FAILURE_COOLDOWN_MS);
+  return healthy.length ? healthy : installed;
+}
+
+export const pickBackend = (agent: string): Backend | null => backendOrder(agent)[0] ?? null;
+
+/** Ask the first backend that works; remember failures so the next run skips a broken one. */
+async function askAnyModel(agent: string, system: string, schema: object, prompt: string, opts: ModelOptions = {}): Promise<{ backend: Backend; result: any }> {
+  const errors: string[] = [];
+  for (const backend of backendOrder(agent)) {
+    try {
+      const result = await askModel(backend, system, schema, prompt, opts);
+      recordHealth(backend, null);
+      return { backend, result };
+    } catch (err) {
+      recordHealth(backend, (err as Error).message);
+      errors.push((err as Error).message);
+    }
+  }
+  throw new Error(errors.join(' | ') || 'no extraction backend (claude or codex) installed');
+}
+export { askAnyModel };
 
 // --- turning model output into plan ops ---
 
@@ -304,10 +362,19 @@ async function extractOnce(repo: Repo, agent: string, session: string, transcrip
     fs.writeFileSync(cursorPath, JSON.stringify({ offset, reviewedAt: reviewed ? Date.now() : cursor.reviewedAt }));
   if (!isSubstantive(segment)) return save(true);
 
-  const backend = pickBackend(agent);
-  if (!backend) return save(false);
+  if (!pickBackend(agent)) return save(false);
   const started = Date.now();
-  const extracted: Extracted[] = (await askModel(backend, SYSTEM_PROMPT, SCHEMA, buildPrompt(repo, segment))).ops ?? [];
+  let backend: Backend;
+  let extracted: Extracted[];
+  try {
+    const answer = await askAnyModel(agent, SYSTEM_PROMPT, SCHEMA, buildPrompt(repo, segment));
+    backend = answer.backend;
+    extracted = answer.result.ops ?? [];
+  } catch (err) {
+    // Leave the cursor where it was: this part of the transcript is retried next turn.
+    log(repo, `extract ${agent}/${session} failed: ${(err as Error).message}`);
+    throw err;
+  }
   const ops = toOps(extracted, repo, session);
   if (ops.length) writeOps(repo, ops);
   save(true);

@@ -1,6 +1,6 @@
 import { describeEntry } from './core/format.js';
 import { reduce } from './core/plan.js';
-import { askModel, pickBackend } from './extract.js';
+import { askAnyModel, pickBackend } from './extract.js';
 import type { Repo } from './git.js';
 import { readState } from './store.js';
 
@@ -35,14 +35,13 @@ export async function reviewPlan(repo: Repo): Promise<Conflict[]> {
   // Notes are state, not commitments: only the plan can contradict itself.
   const entries = [...reduce(readState(repo).ops).values()].filter((e) => e.status === 'open' && e.kind !== 'note');
   if (entries.length < 2) return [];
-  const backend = pickBackend('claude');
-  if (!backend) throw new Error('hivemind review needs the claude or codex CLI');
+  if (!pickBackend('claude')) throw new Error('hivemind review needs the claude or codex CLI');
   const plan = entries
     .sort((a, b) => a.updatedAt - b.updatedAt)
     .map((e) => `- ${e.kind}:${e.key} (by ${e.createdBy}, ${new Date(e.updatedAt).toISOString().slice(11, 16)}): ${describeEntry(e).slice(0, 400)}`)
     .join('\n');
   // Sonnet without thinking: ~13s and coherent groupings; Haiku over-reports and, with thinking, takes ~100s.
-  const out = await askModel(backend, SYSTEM, SCHEMA, `Plan entries, oldest first:\n${plan}`, { model: process.env.HIVEMIND_REVIEW_MODEL ?? 'sonnet', thinking: false });
+  const { result: out } = await askAnyModel('claude', SYSTEM, SCHEMA, `Plan entries, oldest first:\n${plan}`, { model: process.env.HIVEMIND_REVIEW_MODEL ?? 'sonnet', thinking: false });
   return Array.isArray(out.conflicts) ? out.conflicts : [];
 }
 
