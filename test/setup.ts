@@ -15,4 +15,9 @@ Object.assign(process.env, {
   HIVEMIND_HOME: path.join(sandbox, 'hivemind'),
   HIVEMIND_LINK_DIRS: path.join(sandbox, 'linkbin'),
   SHELL: '/bin/sh',
+  // The sandboxed HOME has no ~/.gitconfig, and CI runners have no fallback identity.
+  GIT_AUTHOR_NAME: 'hivemind-test',
+  GIT_AUTHOR_EMAIL: 'test@example.com',
+  GIT_COMMITTER_NAME: 'hivemind-test',
+  GIT_COMMITTER_EMAIL: 'test@example.com',
 });
