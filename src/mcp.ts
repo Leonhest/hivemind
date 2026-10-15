@@ -9,7 +9,7 @@ import { findRepo, samePerson, type Repo } from './git.js';
 import { readState, touchActivity, writeOps, type NewOp } from './store.js';
 import { PUBLIC_NOTICE, readVisibility } from './visibility.js';
 
-const VERSION = '0.1.7';
+const VERSION = '0.1.8';
 
 type Reply = { content: { type: 'text'; text: string }[]; isError?: boolean };
 const text = (t: string, isError = false): Reply => ({ content: [{ type: 'text', text: t }], ...(isError ? { isError } : {}) });

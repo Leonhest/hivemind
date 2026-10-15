@@ -85,7 +85,8 @@ For anything other agents build against — API routes, schemas, shared types, f
 When the user asks you to plan or split up work, record the plan in hivemind: goal_set for goals, contract_publish for the interfaces between pieces, decision_log for choices, and task_add for the tasks (unassigned unless the user says who does what) so teammates can claim them.
 Status, observations, measurements and environment state (what's running where, what's deployed, results) go in the team notebook with note_add, not decision_log; decisions are only choices the team must follow. Never put credentials, personal details or unfixed security issues in the plan.`;
 
-const SUMMARY_CHARS = 4000;
+// ~1,500 tokens, sent once per session. Every section is guaranteed a few lines within it.
+const SUMMARY_CHARS = 6000;
 
 /** Op ids returned by our own MCP tools, e.g. "[op:abc123]". */
 function ownOpIds(input: HookInput): string[] {

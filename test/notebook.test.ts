@@ -70,6 +70,20 @@ describe('plan summary', () => {
     expect(s).toContain('(1 finished tasks and 1 older notes hidden');
   });
 
+  it('shows every section within the budget, even for a large plan', () => {
+    const long = 'x'.repeat(200);
+    const big = [
+      ...Array.from({ length: 30 }, (_, i) => op({ kind: 'task', key: `t${i}`, data: { title: `task ${i} ${long}`, status: 'doing' } })),
+      ...Array.from({ length: 30 }, (_, i) => op({ kind: 'contract', key: `c${i}`, data: { spec: long } })),
+      ...Array.from({ length: 30 }, (_, i) => op({ kind: 'decision', key: `d${i}`, data: { text: long } })),
+      ...Array.from({ length: 10 }, (_, i) => op({ kind: 'question', key: `q${i}`, data: { text: long } })),
+      ...Array.from({ length: 10 }, (_, i) => op({ kind: 'note', key: `n${i}`, data: { text: long } })),
+    ];
+    const s = formatSummary(big, { now: NOW, compact: true, maxChars: 6000 });
+    for (const h of ['## Tasks', '## Contracts', '## Decisions', '## Open questions', '## Notebook (last 24h)']) expect(s).toContain(h);
+    expect(s.length).toBeLessThanOrEqual(6000);
+  });
+
   it('kind filter shows everything of that kind', () => {
     expect(formatSummary(ops, { now: NOW, kind: 'task' })).toContain('Shipped long ago');
     expect(formatSummary(ops, { now: NOW, kind: 'note' })).toContain('Disk was full');

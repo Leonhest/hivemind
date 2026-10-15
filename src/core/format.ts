@@ -89,41 +89,55 @@ export function formatSummary(ops: Op[], opts: SummaryOptions = {}): string {
     .sort((a, b) => (TASK_ORDER[String(a.data.status ?? 'todo')] ?? 2) - (TASK_ORDER[String(b.data.status ?? 'todo')] ?? 2) || byRecency(a, b));
   const notes = of('note').filter((e) => kind === 'note' || recent(e)).sort(byRecency);
 
-  const sections: [string, Entry[], number, (e: Entry) => string][] = [
-    ['Goals', of('goal').sort(byRecency), 5, describeEntry],
-    ['Tasks', tasks, 12, describeEntry],
-    ['Contracts (shared APIs, schemas, types)', of('contract').sort(byRecency), 8, describeEntry],
-    ['Decisions', of('decision').sort(byRecency), 10, describeEntry],
-    ['Open questions', of('question').sort(byRecency), 6, describeEntry],
-    [kind === 'note' ? 'Notebook' : 'Notebook (last 24h)', notes, 6, (e) => `${ago(e.updatedAt, now)}: ${describeEntry(e)}`],
+  // [title, items, cap, guaranteed lines in the compact view, render]
+  const sections: [string, Entry[], number, number, (e: Entry) => string][] = [
+    ['Goals', of('goal').sort(byRecency), 5, 5, describeEntry],
+    ['Tasks', tasks, 12, 6, describeEntry],
+    ['Contracts (shared APIs, schemas, types)', of('contract').sort(byRecency), 8, 3, describeEntry],
+    ['Decisions', of('decision').sort(byRecency), 10, 4, describeEntry],
+    ['Open questions', of('question').sort(byRecency), 6, 3, describeEntry],
+    [kind === 'note' ? 'Notebook' : 'Notebook (last 24h)', notes, 6, 3, (e) => `${ago(e.updatedAt, now)}: ${describeEntry(e)}`],
   ];
+  const line = (render: (e: Entry) => string, e: Entry) => `- ${clip(render(e), compact ? 150 : 400)}`;
 
-  const lines: string[] = [];
+  const header: string[] = [];
   const warning = competingWarning(competingGoals(entries));
-  if (warning) lines.push(warning);
-  for (const [title, items, cap, render] of sections) {
-    if (!items.length) continue;
-    lines.push(`## ${title}`);
-    const shown = compact ? items.slice(0, cap) : items;
-    // Compact lines are a pointer, not the whole entry: plan_get has the full text.
-    for (const e of shown) lines.push(`- ${clip(render(e), compact ? 150 : 400)}`);
-    if (shown.length < items.length) lines.push(`- … ${items.length - shown.length} more (plan_get kind=${items[0].kind})`);
-  }
+  if (warning) header.push(warning);
   const hiddenDone = kind ? 0 : of('task').length - tasks.length;
   const olderNotes = kind ? 0 : of('note').length - notes.length;
-  if (hiddenDone || olderNotes) {
-    lines.push(`(${[hiddenDone && `${hiddenDone} finished tasks`, olderNotes && `${olderNotes} older notes`].filter(Boolean).join(' and ')} hidden: plan_get kind=task / notebook_get)`);
+  const footer =
+    hiddenDone || olderNotes
+      ? [`(${[hiddenDone && `${hiddenDone} finished tasks`, olderNotes && `${olderNotes} older notes`].filter(Boolean).join(' and ')} hidden: plan_get kind=task / notebook_get)`]
+      : [];
+
+  // How many items each section shows. Full view: everything. Compact view: every section first
+  // gets a few guaranteed lines, then leftover space goes to sections in priority order up to their cap.
+  const shown = sections.map(([, items, cap, floor]) => (compact ? Math.min(items.length, floor, cap) : items.length));
+  if (compact && Number.isFinite(maxChars)) {
+    const size = () =>
+      [...header, ...footer].reduce((n, l) => n + l.length + 1, 0) +
+      sections.reduce((n, [title, items, , , render], i) => {
+        if (!items.length) return n;
+        const body = items.slice(0, shown[i]).reduce((m, e) => m + line(render, e).length + 1, 0);
+        return n + title.length + 4 + body + (shown[i] < items.length ? 40 : 0);
+      }, 0);
+    for (let i = 0; i < sections.length; i++) {
+      const [, items, cap, , render] = sections[i];
+      while (shown[i] < Math.min(items.length, cap) && size() + line(render, items[shown[i]]).length + 1 <= maxChars) shown[i]++;
+    }
+  } else if (compact) {
+    sections.forEach(([, items, cap], i) => (shown[i] = Math.min(items.length, cap)));
   }
 
-  let out = '';
-  for (let i = 0; i < lines.length; i++) {
-    if (out.length + lines[i].length + 1 > maxChars) {
-      out += `… ${lines.length - i} more lines (call the hivemind plan_get tool for everything)\n`;
-      break;
-    }
-    out += lines[i] + '\n';
-  }
-  return out.trimEnd();
+  const lines = [...header];
+  sections.forEach(([title, items, , , render], i) => {
+    if (!items.length) return;
+    lines.push(`## ${title}`);
+    for (const e of items.slice(0, shown[i])) lines.push(line(render, e));
+    if (shown[i] < items.length) lines.push(`- … ${items.length - shown[i]} more (${items[0].kind === 'note' ? 'notebook_get' : `plan_get kind=${items[0].kind}`})`);
+  });
+  lines.push(...footer);
+  return lines.join('\n');
 }
 
 export function describeChange(op: Op, before: Entry | undefined): string {
