@@ -32,7 +32,8 @@ const SCHEMA = {
 };
 
 export async function reviewPlan(repo: Repo): Promise<Conflict[]> {
-  const entries = [...reduce(readState(repo).ops).values()].filter((e) => e.status === 'open');
+  // Notes are state, not commitments: only the plan can contradict itself.
+  const entries = [...reduce(readState(repo).ops).values()].filter((e) => e.status === 'open' && e.kind !== 'note');
   if (entries.length < 2) return [];
   const backend = pickBackend('claude');
   if (!backend) throw new Error('hivemind review needs the claude or codex CLI');

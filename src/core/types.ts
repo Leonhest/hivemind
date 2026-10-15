@@ -1,5 +1,6 @@
-export type Kind = 'goal' | 'task' | 'contract' | 'decision' | 'question';
-export const KINDS: Kind[] = ['goal', 'task', 'contract', 'decision', 'question'];
+/** The plan: goal, task, contract, decision, question. The notebook: note (status, observations, findings). */
+export type Kind = 'goal' | 'task' | 'contract' | 'decision' | 'question' | 'note';
+export const KINDS: Kind[] = ['goal', 'task', 'contract', 'decision', 'question', 'note'];
 
 /** One line in a member's ops.jsonl. Append-only. */
 export interface Op {

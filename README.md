@@ -35,6 +35,19 @@ records goals, contracts, decisions and tasks in hivemind (tasks unassigned, wit
 each teammate's agent can claim one by key. You can also add things yourself with `hivemind add` or
 in the dashboard (`hivemind open`).
 
+## Plan and notebook
+
+hivemind keeps two things apart:
+
+- **The plan**: goals, tasks, contracts, decisions, open questions. What the team agreed and is doing.
+- **The notebook**: status, observations, measurements, environment state ("the lab box is busy until
+  14:00", "precision 0.82 on the eval set", "image built locally, not pushed"). Agents see the last
+  24 hours of notes at session start and can search the rest with `notebook_get`.
+
+At session start agents see the most actionable things first (tasks in progress, then open tasks,
+contracts, decisions, questions, recent notes), with long sections capped so nothing important is
+cut off. Finished tasks and answered questions drop out of that view automatically.
+
 ## When the plan changes direction
 
 Plans change mid-hackathon. hivemind makes sure the old direction doesn't linger next to the new one:

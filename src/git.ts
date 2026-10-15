@@ -1,5 +1,5 @@
 import { execFile, execFileSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { randomBytes } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -49,6 +49,30 @@ export const FETCH_REFSPEC = `+${LOCAL_PREFIX}*:${REMOTE_PREFIX}*`;
 const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 32) || 'member';
 
 /**
+ * This clone's member id, chosen once and stored in .git/config (hivemind.member).
+ * It used to be derived from the hostname, which macOS changes between networks, splitting one
+ * person into several members. Existing clones keep the id they already publish under.
+ */
+function stableMemberId(root: string): string {
+  const stored = tryGit(root, ['config', 'hivemind.member']);
+  if (stored) return stored;
+  const who = slug(tryGit(root, ['config', 'user.email'])?.split('@')[0] ?? tryGit(root, ['config', 'user.name']) ?? os.userInfo().username);
+  // Reuse our newest existing log, so upgrading doesn't start yet another member.
+  const existing = tryGit(root, ['for-each-ref', '--sort=-committerdate', '--format=%(refname:lstrip=2)', LOCAL_PREFIX])
+    ?.split('\n')
+    .find((id) => personOf(id) === who);
+  const id = existing ?? `${who}-${randomBytes(3).toString('hex')}`;
+  tryGit(root, ['config', 'hivemind.member', id]);
+  return id;
+}
+
+/** "anders03-vestrum-3fc98f" → "anders03-vestrum": the person behind a member id. */
+export const personOf = (memberId: string) => memberId.replace(/-[0-9a-f]{6}$/, '');
+
+/** Same person, possibly under an older id (from before ids were stable) or another clone. */
+export const samePerson = (a: unknown, b: unknown) => typeof a === 'string' && typeof b === 'string' && (a === b || personOf(a) === personOf(b));
+
+/**
  * The repo containing `cwd`, or null if hivemind should stay out of the way:
  * no git repo, no origin remote, or turned off with `hivemind disable` (unless includeDisabled).
  */
@@ -58,10 +82,7 @@ export function findRepo(cwd: string, opts: { includeDisabled?: boolean } = {}):
   if (!tryGit(root, ['remote', 'get-url', 'origin'])) return null;
   if (!opts.includeDisabled && !isEnabled(root)) return null;
   const commonDir = path.resolve(root, git(root, ['rev-parse', '--git-common-dir']));
-  const who = tryGit(root, ['config', 'user.email'])?.split('@')[0] ?? tryGit(root, ['config', 'user.name']) ?? os.userInfo().username;
-  // Include the clone path so two clones on one machine are distinct members.
-  const machine = createHash('sha1').update(`${os.hostname()}:${commonDir}`).digest('hex').slice(0, 6);
-  const memberId = process.env.HIVEMIND_MEMBER ?? `${slug(who)}-${machine}`;
+  const memberId = process.env.HIVEMIND_MEMBER ?? stableMemberId(root);
   return { root, commonDir, stateDir: path.join(commonDir, 'hivemind'), memberId, ownRef: LOCAL_PREFIX + memberId };
 }
 

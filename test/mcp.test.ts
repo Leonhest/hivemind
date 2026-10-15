@@ -99,4 +99,15 @@ describe('MCP tools', () => {
     expect(decisions).not.toContain('SQLite');
     expect((await call('decision_log', { key: 'x', text: 'y', replaces: ['nope'] })).text).toContain('Nothing to replace');
   });
+
+  it('note_add writes to the notebook, notebook_get searches it, answering a question closes it', async () => {
+    await call('note_add', { key: 'lab-status', text: 'Trondheim lab box busy until 14:00' });
+    await call('note_add', { text: 'Eval run: precision 0.82' });
+    expect((await call('notebook_get', { query: 'trondheim' })).text).toMatch(/lead-\w{6}: Trondheim lab box busy until 14:00 `lab-status`/);
+    expect((await call('plan_get', {})).text).toContain('## Notebook (last 24h)');
+    await call('question', { key: 'db', text: 'Postgres or SQLite?' });
+    expect((await call('plan_get', { kind: 'question' })).text).toContain('Postgres or SQLite?');
+    expect((await call('question', { key: 'db', answer: 'Postgres' })).text).toContain('Answered and closed');
+    expect((await call('plan_get', { kind: 'question' })).text).not.toContain('Postgres or SQLite?');
+  });
 });

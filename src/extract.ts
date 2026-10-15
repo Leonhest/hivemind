@@ -5,7 +5,7 @@ import path from 'node:path';
 import { describeEntry } from './core/format.js';
 import { entryId, reduce } from './core/plan.js';
 import { KINDS, type Kind } from './core/types.js';
-import type { Repo } from './git.js';
+import { samePerson, type Repo } from './git.js';
 import { log } from './log.js';
 import { readState, writeOps, type NewOp } from './store.js';
 import { isSubstantive, renderTranscript } from './transcript.js';
@@ -19,8 +19,11 @@ export const SYSTEM_PROMPT = `You maintain a shared plan for a team of coding ag
 Entry kinds:
 - task: what this agent is working on (from the user's request), notable progress, completion, or being blocked. status: todo | doing | done | blocked.
 - contract: anything other agents build against — API routes with request/response shapes, database schemas, shared types, env vars, CLI flags, module/file ownership. spec must be concrete. breaking=true only if it changes an existing contract incompatibly.
-- decision: project-wide choices others must follow (libraries, conventions, architecture), with rationale if stated.
-- question: an open question that needs input from the team.
+- decision: a CHOICE the team must keep following (a library, a convention, an architecture, a rule like "never bulk-copy over the store uplink"), with rationale if stated. Not a fact about the current state.
+- question: an open question that needs input from the team. If the transcript answers or resolves an existing open question, emit it with its exact key and the answer in "answer" (it is then closed).
+- note: the team notebook for STATE and FINDINGS that teammates benefit from but that aren't choices: what's running where, which machine is busy, disk/space, what was deployed or built (and where), measurements, eval/benchmark results, root causes found, incidents. Reuse a key to update a running status (e.g. "lab-box-status").
+
+Telling decision and note apart: "We use Postgres" / "Don't deploy on Fridays" → decision. "dev-2 is busy until 14:00" / "precision is 0.82 on the eval set" / "image built locally, not pushed" → note.
 
 Rules:
 - Only include things explicitly stated or actually done in the transcript. Never guess.
@@ -45,7 +48,7 @@ export const SCHEMA = {
       items: {
         type: 'object',
         additionalProperties: false,
-        required: ['kind', 'key', 'title', 'status', 'spec', 'breaking', 'text', 'rationale', 'areas', 'replaces', 'confidence', 'evidence'],
+        required: ['kind', 'key', 'title', 'status', 'spec', 'breaking', 'text', 'rationale', 'answer', 'areas', 'replaces', 'confidence', 'evidence'],
         properties: {
           kind: { type: 'string', enum: KINDS.filter((k) => k !== 'goal') },
           key: { type: 'string' },
@@ -55,6 +58,7 @@ export const SCHEMA = {
           breaking: nullable('boolean'),
           text: nullable('string'),
           rationale: nullable('string'),
+          answer: nullable('string'),
           areas: { type: ['array', 'null'], items: { type: 'string' } },
           replaces: { type: ['array', 'null'], items: { type: 'string' } },
           confidence: { type: 'number' },
@@ -74,6 +78,7 @@ export interface Extracted {
   breaking?: boolean | null;
   text?: string | null;
   rationale?: string | null;
+  answer?: string | null;
   areas?: string[] | null;
   replaces?: string[] | null;
   confidence: number;
@@ -185,6 +190,16 @@ export function toOps(extracted: Extracted[], repo: Repo, agentId: string): NewO
         data = { text: e.text, ...(e.rationale ? { rationale: e.rationale } : {}) };
         break;
       case 'question':
+        if (e.answer) {
+          // Resolved: close it, keeping the answer on the closed entry.
+          const q = entries.get(entryId({ kind: 'question', key: e.key }));
+          if (q?.status === 'open') ops.push({ type: 'close', kind: 'question', key: e.key.trim(), data: { answer: e.answer }, source: 'inferred', evidence: String(e.evidence ?? '').slice(0, 300), agent: agentId });
+          continue;
+        }
+        if (!e.text) continue;
+        data = { text: e.text };
+        break;
+      case 'note':
         if (!e.text) continue;
         data = { text: e.text };
         break;
@@ -194,7 +209,7 @@ export function toOps(extracted: Extracted[], repo: Repo, agentId: string): NewO
     if (Array.isArray(e.areas) && e.areas.length) data.areas = e.areas.filter((a) => typeof a === 'string').slice(0, 10);
     const existing = entries.get(entryId({ kind: e.kind, key: e.key }));
     // A task someone else owns: record progress without stealing ownership.
-    if (e.kind === 'task' && existing?.data.owner && existing.data.owner !== repo.memberId) delete data.owner;
+    if (e.kind === 'task' && existing?.data.owner && !samePerson(existing.data.owner, repo.memberId)) delete data.owner;
     const unchanged = existing?.status === 'open' && Object.entries(data).every(([k, v]) => JSON.stringify(existing.data[k]) === JSON.stringify(v));
     if (unchanged && !e.replaces?.length) continue;
     ops.push({ kind: e.kind, key: e.key.trim(), data, source: 'inferred', evidence: String(e.evidence ?? '').slice(0, 300), agent: agentId });
@@ -209,7 +224,9 @@ export function toOps(extracted: Extracted[], repo: Repo, agentId: string): NewO
 }
 
 export function buildPrompt(repo: Repo, segment: string): string {
-  const entries = [...reduce(readState(repo).ops).values()].filter((e) => e.status === 'open');
+  // The plan plus only the last day of notes: the full notebook would swamp the prompt.
+  const dayAgo = Date.now() - 24 * 60 * 60_000;
+  const entries = [...reduce(readState(repo).ops).values()].filter((e) => e.status === 'open' && (e.kind !== 'note' || e.updatedAt > dayAgo));
   const plan = entries.length ? entries.map((e) => `- ${e.kind} "${e.key}": ${describeEntry(e).slice(0, 200)}`).join('\n') : '(empty)';
   return `Current shared plan:\n${plan}\n\nThis agent's team member id: ${repo.memberId}\n\nNew transcript segment:\n${segment}`;
 }

@@ -72,7 +72,7 @@ async function main(): Promise<void> {
         console.error(`usage: hivemind add <${KINDS.join('|')}> <key> <text> [--breaking]`);
         process.exit(1);
       }
-      const field = { goal: 'text', decision: 'text', question: 'text', contract: 'spec', task: 'title' }[kind as Kind];
+      const field = { goal: 'text', decision: 'text', question: 'text', contract: 'spec', task: 'title', note: 'text' }[kind as Kind];
       const data: Record<string, unknown> = { [field]: textArg };
       if (kind === 'contract') data.breaking = breaking;
       if (kind === 'task') data.status = 'todo';

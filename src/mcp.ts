@@ -5,11 +5,11 @@ import { describeEntry, formatSummary } from './core/format.js';
 import { entryId, reduce } from './core/plan.js';
 import { KINDS, type Kind } from './core/types.js';
 import { ensureDaemon } from './daemon.js';
-import { findRepo, type Repo } from './git.js';
+import { findRepo, samePerson, type Repo } from './git.js';
 import { readState, touchActivity, writeOps, type NewOp } from './store.js';
 import { PUBLIC_NOTICE, readVisibility } from './visibility.js';
 
-const VERSION = '0.1.6';
+const VERSION = '0.1.7';
 
 type Reply = { content: { type: 'text'; text: string }[]; isError?: boolean };
 const text = (t: string, isError = false): Reply => ({ content: [{ type: 'text', text: t }], ...(isError ? { isError } : {}) });
@@ -39,16 +39,16 @@ export async function runMcp(): Promise<void> {
   server.registerTool(
     'plan_get',
     {
-      description: "Read the team's shared plan: goals, contracts (APIs/schemas/types), decisions, tasks and open questions.",
+      description:
+        "Read the team's shared plan: goals, tasks, contracts (APIs/schemas/types), decisions, open questions, and the last day of notebook entries. Pass kind to see everything of one kind, including finished tasks.",
       inputSchema: { kind: z.enum(KINDS as [Kind, ...Kind[]]).optional().describe('Only return this kind of entry') },
     },
     async ({ kind }) => {
       const r = repo();
       if (!r) return text(NOT_A_REPO, true);
       touchActivity(r);
-      const ops = readState(r).ops.filter((o) => !kind || o.kind === kind);
       const notice = readVisibility(r)?.public ? `${PUBLIC_NOTICE}\n` : '';
-      return text(`${notice}You are ${r.memberId}.\n${formatSummary(ops)}`);
+      return text(`${notice}You are ${r.memberId}.\n${formatSummary(readState(r).ops, { kind })}`);
     },
   );
 
@@ -70,7 +70,7 @@ export async function runMcp(): Promise<void> {
       if (!title && !open) return text(`There is no task "${key}" in the plan yet; pass a title to create and claim it.`, true);
       const owner = open ? prev.data.owner : undefined;
       const warning =
-        r && owner && owner !== r.memberId && prev?.data.status === 'doing' ? ` Warning: ${owner} had already claimed this task; coordinate with them.` : '';
+        r && owner && !samePerson(owner, r.memberId) && prev?.data.status === 'doing' ? ` Warning: ${owner} had already claimed this task; coordinate with them.` : '';
       return publish(
         { kind: 'task', key, data: { ...(title ? { title } : {}), status: 'doing', owner: r?.memberId, ...(areas ? { areas } : {}) } },
         `Claimed task "${key}".${warning}`,
@@ -240,11 +240,52 @@ export async function runMcp(): Promise<void> {
   server.registerTool(
     'question',
     {
-      description: 'Ask the team an open question, or answer one (providing answer closes it for discussion).',
+      description: 'Ask the team an open question, or answer one: providing answer resolves it and removes it from the open questions.',
       inputSchema: { key: z.string(), text: z.string().optional(), answer: z.string().optional() },
     },
     async ({ key, text: t, answer }) =>
-      publish({ kind: 'question', key, data: { ...(t ? { text: t } : {}), ...(answer ? { answer } : {}) } }, answer ? `Answered "${key}".` : `Asked "${key}".`),
+      answer
+        ? publish({ type: 'close', kind: 'question', key, data: { ...(t ? { text: t } : {}), answer } }, `Answered and closed "${key}".`)
+        : publish({ kind: 'question', key, data: t ? { text: t } : {} }, `Asked "${key}".`),
+  );
+
+  server.registerTool(
+    'note_add',
+    {
+      description:
+        "Write to the team notebook: status, observations, measurements, results, environment state (e.g. 'lab box is busy until 14:00', 'eval run: precision 0.82', 'image built locally, not in the registry'). Use this instead of decision_log for anything that is a fact about the current state rather than a choice the team must follow. Notes from the last 24h are shown to every agent.",
+      inputSchema: {
+        text: z.string(),
+        key: z.string().optional().describe('Reuse a key to update a running note (e.g. "lab-status"); omit for a one-off note'),
+        areas: z.array(z.string()).optional(),
+      },
+    },
+    async ({ text: t, key, areas }) => {
+      const k = key ?? `note-${new Date().toISOString().slice(0, 16).replace(/[:T]/g, '')}-${Math.random().toString(36).slice(2, 5)}`;
+      return publish({ kind: 'note', key: k, data: { text: t, ...(areas ? { areas } : {}) } }, `Noted "${k}".`);
+    },
+  );
+
+  server.registerTool(
+    'notebook_get',
+    {
+      description: 'Read the team notebook (status notes, observations, results), newest first. Optionally only notes matching a search term.',
+      inputSchema: {
+        query: z.string().optional().describe('Case-insensitive text to match'),
+        limit: z.number().int().min(1).max(200).optional().describe('Default 40'),
+      },
+    },
+    async ({ query, limit }) => {
+      const r = repo();
+      if (!r) return text(NOT_A_REPO, true);
+      const q = query?.toLowerCase();
+      const notes = [...reduce(readState(r).ops).values()]
+        .filter((e) => e.kind === 'note' && e.status === 'open' && (!q || JSON.stringify(e.data).toLowerCase().includes(q) || e.key.toLowerCase().includes(q)))
+        .sort((a, b) => b.updatedAt - a.updatedAt)
+        .slice(0, limit ?? 40);
+      if (!notes.length) return text(q ? `No notes match "${query}".` : 'The notebook is empty.');
+      return text(notes.map((e) => `- ${new Date(e.updatedAt).toISOString().slice(0, 16).replace('T', ' ')}Z ${e.updatedBy}: ${describeEntry(e)}`).join('\n'));
+    },
   );
 
   server.registerTool(

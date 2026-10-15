@@ -85,7 +85,7 @@ export async function runDashboard(repo: Repo, args: string[]): Promise<void> {
           res.writeHead(400);
           return res.end('kind, key and text are required');
         }
-        const field = { goal: 'text', decision: 'text', question: 'text', contract: 'spec', task: 'title' }[kind as Kind];
+        const field = { goal: 'text', decision: 'text', question: 'text', contract: 'spec', task: 'title', note: 'text' }[kind as Kind];
         const data: Record<string, unknown> = { [field]: text.trim() };
         if (kind === 'contract') data.breaking = Boolean(breaking);
         if (kind === 'task') data.status = 'todo';
@@ -185,6 +185,7 @@ label.check input { width: auto; }
     <section><h2>Tasks</h2><div class="board" id="tasks"></div></section>
     <section><h2>Decisions</h2><ul id="decision"></ul></section>
     <section><h2>Open questions</h2><ul id="question"></ul></section>
+    <section><h2>Notebook</h2><ul id="note"></ul></section>
   </div>
   <aside>
     <section><h2>Team</h2><div id="members"></div></section>
@@ -194,7 +195,7 @@ label.check input { width: auto; }
         <div class="row">
           <select name="kind" aria-label="Kind">
             <option value="goal">Goal</option><option value="task">Task</option><option value="contract">Contract</option>
-            <option value="decision">Decision</option><option value="question">Question</option>
+            <option value="decision">Decision</option><option value="question">Question</option><option value="note">Note</option>
           </select>
           <input name="key" placeholder="key, e.g. auth-api" aria-label="Key" required>
         </div>
@@ -228,6 +229,7 @@ function render(s) {
   list('contract', of('contract'), (e) => '<span class="key">' + esc(e.key) + '</span>' +
     (e.data.breaking ? '<span class="badge breaking">breaking</span>' : '') + '<div class="spec">' + esc(e.data.spec) + '</div>' + by(e));
   list('decision', of('decision'), (e) => esc(e.data.text) + (e.data.rationale ? '<div class="meta">why: ' + esc(e.data.rationale) + '</div>' : '') + by(e));
+  list('note', of('note').slice(0, 30), (e) => esc(e.data.text) + by(e));
   list('question', of('question'), (e) => esc(e.data.text) + (e.data.answer ? '<div class="meta">→ ' + esc(e.data.answer) + '</div>' : '') + by(e));
   const cols = ['todo', 'doing', 'blocked', 'done'];
   $('tasks').innerHTML = cols.map((c) => {

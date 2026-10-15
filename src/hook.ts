@@ -4,7 +4,7 @@ import { formatDiff, formatSummary } from './core/format.js';
 import { reduce } from './core/plan.js';
 import { ensureDaemon, readSyncStatus } from './daemon.js';
 import { isExtracting, lastReviewed, spawnExtract } from './extract.js';
-import { FETCH_REFSPEC, findRepo, type Repo } from './git.js';
+import { FETCH_REFSPEC, findRepo, samePerson, type Repo } from './git.js';
 import { log } from './log.js';
 import { PUBLIC_NOTICE, readVisibility, refreshVisibility } from './visibility.js';
 import { loadSession, readState, rebuild, saveSession, touchActivity, type Session } from './store.js';
@@ -82,9 +82,10 @@ export const ADAPTERS: Record<string, Adapter> = {
 
 const INTRO = `[hivemind] This repo shares a live plan with teammates' coding agents on other machines (synced through git). Teammates' changes appear in your context automatically, and the plan is updated automatically from your work.
 For anything other agents build against — API routes, schemas, shared types, file ownership — or project-wide decisions, publish it right away with the hivemind MCP tools (contract_publish, decision_log, task_claim, task_update) so teammates don't wait. Mark incompatible contract changes breaking=true.
-When the user asks you to plan or split up work, record the plan in hivemind: goal_set for goals, contract_publish for the interfaces between pieces, decision_log for choices, and task_add for the tasks (unassigned unless the user says who does what) so teammates can claim them. Never put credentials, personal details or unfixed security issues in the plan.`;
+When the user asks you to plan or split up work, record the plan in hivemind: goal_set for goals, contract_publish for the interfaces between pieces, decision_log for choices, and task_add for the tasks (unassigned unless the user says who does what) so teammates can claim them.
+Status, observations, measurements and environment state (what's running where, what's deployed, results) go in the team notebook with note_add, not decision_log; decisions are only choices the team must follow. Never put credentials, personal details or unfixed security issues in the plan.`;
 
-const SUMMARY_CHARS = 3200;
+const SUMMARY_CHARS = 4000;
 
 /** Op ids returned by our own MCP tools, e.g. "[op:abc123]". */
 function ownOpIds(input: HookInput): string[] {
@@ -101,7 +102,7 @@ function hasClaim(repo: Repo, sessionId: string, session: Session): boolean {
   const own = new Set(session.ownOps);
   const ops = readState(repo).ops;
   if (ops.some((o) => o.kind === 'task' && (own.has(o.id) || o.agent === sessionId))) return true;
-  return [...reduce(ops).values()].some((e) => e.kind === 'task' && e.status === 'open' && e.data.owner === repo.memberId && e.data.status === 'doing');
+  return [...reduce(ops).values()].some((e) => e.kind === 'task' && e.status === 'open' && samePerson(e.data.owner, repo.memberId) && e.data.status === 'doing');
 }
 
 function claimNudge(repo: Repo): string {
@@ -154,7 +155,7 @@ function startSession(repo: Repo, sessionId: string): string {
   const state = readState(repo);
   saveSession(repo, sessionId, { lastSeq: state.seq, ownOps: [], touched: [], startedAt: Date.now() });
   const notice = readVisibility(repo)?.public ? `\n${PUBLIC_NOTICE}` : '';
-  return `${INTRO}${notice}\n\nCurrent shared plan (you are ${repo.memberId}):\n${formatSummary(state.ops, SUMMARY_CHARS)}`;
+  return `${INTRO}${notice}\n\nCurrent shared plan (you are ${repo.memberId}):\n${formatSummary(state.ops, { maxChars: SUMMARY_CHARS, compact: true })}`;
 }
 
 /** Returns the text to inject into the agent's context, or '' for nothing. */

@@ -28,16 +28,15 @@ export function describeEntry(e: Entry): string {
       return `${str(d.text)}${d.rationale ? ` (why: ${str(d.rationale)})` : ''}`;
     case 'question':
       return `${str(d.text)}${d.answer ? ` → ${str(d.answer)}` : ''}`;
+    case 'note':
+      return `${str(d.text)} \`${e.key}\``;
   }
 }
 
-const SECTIONS: [Kind, string][] = [
-  ['goal', 'Goals'],
-  ['contract', 'Contracts (shared APIs, schemas, types)'],
-  ['decision', 'Decisions'],
-  ['task', 'Tasks'],
-  ['question', 'Open questions'],
-];
+const ago = (ts: number, now: number) => {
+  const m = Math.max(0, Math.round((now - ts) / 60_000));
+  return m < 60 ? `${m}m ago` : m < 48 * 60 ? `${Math.round(m / 60)}h ago` : `${Math.round(m / 1440)}d ago`;
+};
 
 /** Open goals that were added as competing proposals and whose rivals are still open. */
 export function competingGoals(entries: Entry[]): string[][] {
@@ -56,23 +55,66 @@ export const competingWarning = (groups: string[][]) =>
     ? `⚠️ Competing goals: the team hasn't picked one yet (${groups.map((g) => g.join(' vs ')).join('; ')}). Ask the user which applies before building on either, then record it with goal_set replaces=[…].`
     : '';
 
-/** Full plan, used at session start and by plan_get. */
-export function formatSummary(ops: Op[], maxChars = Infinity): string {
-  const openGoals = new Set([...reduce(ops).values()].filter((e) => e.kind === 'goal' && e.status === 'open').map((e) => e.key));
-  // A goal is only "competing" while its rivals are still in the plan.
-  const entries = [...reduce(ops).values()]
-    .filter((e) => e.status === 'open')
-    .map((e) => (Array.isArray(e.data.alternative_to) ? { ...e, data: { ...e.data, alternative_to: (e.data.alternative_to as string[]).filter((k) => openGoals.has(k)) } } : e));
-  if (entries.length === 0) return 'The shared plan is empty.';
+const DAY = 24 * 60 * 60_000;
+const TASK_ORDER: Record<string, number> = { doing: 0, blocked: 1, todo: 2, done: 3 };
+const isOpenGoalAlt = (e: Entry, open: Set<string>): Entry =>
+  Array.isArray(e.data.alternative_to) ? { ...e, data: { ...e.data, alternative_to: (e.data.alternative_to as string[]).filter((k) => open.has(k)) } } : e;
+
+export interface SummaryOptions {
+  maxChars?: number;
+  /** Session-start view: active things first, capped per section so nothing important is cut. */
+  compact?: boolean;
+  /** Only this kind (plan_get kind=…); shows everything of that kind, including finished tasks and old notes. */
+  kind?: Kind;
+  now?: number;
+}
+
+/**
+ * The plan, most actionable first: goals, tasks in progress, contracts, decisions, open questions,
+ * then the last day of notebook entries. Finished tasks and notes older than a day are hidden
+ * (they stay in the history and in plan_get kind=task / notebook_get).
+ */
+export function formatSummary(ops: Op[], opts: SummaryOptions = {}): string {
+  const { maxChars = Infinity, compact = false, kind, now = Date.now() } = opts;
+  const all = [...reduce(ops).values()].filter((e) => e.status === 'open');
+  const openGoals = new Set(all.filter((e) => e.kind === 'goal').map((e) => e.key));
+  const entries = all.map((e) => isOpenGoalAlt(e, openGoals)).filter((e) => !kind || e.kind === kind);
+  if (entries.length === 0) return kind ? `No open ${kind}s in the plan.` : 'The shared plan is empty.';
+
+  const recent = (e: Entry) => now - e.updatedAt < DAY;
+  const byRecency = (a: Entry, b: Entry) => b.updatedAt - a.updatedAt;
+  const of = (k: Kind) => entries.filter((e) => e.kind === k);
+  const tasks = of('task')
+    .filter((e) => kind === 'task' || e.data.status !== 'done' || recent(e))
+    .sort((a, b) => (TASK_ORDER[String(a.data.status ?? 'todo')] ?? 2) - (TASK_ORDER[String(b.data.status ?? 'todo')] ?? 2) || byRecency(a, b));
+  const notes = of('note').filter((e) => kind === 'note' || recent(e)).sort(byRecency);
+
+  const sections: [string, Entry[], number, (e: Entry) => string][] = [
+    ['Goals', of('goal').sort(byRecency), 5, describeEntry],
+    ['Tasks', tasks, 12, describeEntry],
+    ['Contracts (shared APIs, schemas, types)', of('contract').sort(byRecency), 8, describeEntry],
+    ['Decisions', of('decision').sort(byRecency), 10, describeEntry],
+    ['Open questions', of('question').sort(byRecency), 6, describeEntry],
+    [kind === 'note' ? 'Notebook' : 'Notebook (last 24h)', notes, 6, (e) => `${ago(e.updatedAt, now)}: ${describeEntry(e)}`],
+  ];
+
   const lines: string[] = [];
   const warning = competingWarning(competingGoals(entries));
   if (warning) lines.push(warning);
-  for (const [kind, title] of SECTIONS) {
-    const items = entries.filter((e) => e.kind === kind).sort((a, b) => b.updatedAt - a.updatedAt);
+  for (const [title, items, cap, render] of sections) {
     if (!items.length) continue;
     lines.push(`## ${title}`);
-    for (const e of items) lines.push(`- ${clip(describeEntry(e), 300)}`);
+    const shown = compact ? items.slice(0, cap) : items;
+    // Compact lines are a pointer, not the whole entry: plan_get has the full text.
+    for (const e of shown) lines.push(`- ${clip(render(e), compact ? 150 : 400)}`);
+    if (shown.length < items.length) lines.push(`- … ${items.length - shown.length} more (plan_get kind=${items[0].kind})`);
   }
+  const hiddenDone = kind ? 0 : of('task').length - tasks.length;
+  const olderNotes = kind ? 0 : of('note').length - notes.length;
+  if (hiddenDone || olderNotes) {
+    lines.push(`(${[hiddenDone && `${hiddenDone} finished tasks`, olderNotes && `${olderNotes} older notes`].filter(Boolean).join(' and ')} hidden: plan_get kind=task / notebook_get)`);
+  }
+
   let out = '';
   for (let i = 0; i < lines.length; i++) {
     if (out.length + lines[i].length + 1 > maxChars) {
