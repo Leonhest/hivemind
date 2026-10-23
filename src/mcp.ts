@@ -13,7 +13,7 @@ import { findRepo, samePerson, type Repo } from './git.js';
 import { readState, touchActivity, writeOps, type NewOp } from './store.js';
 import { PUBLIC_NOTICE, readVisibility } from './visibility.js';
 
-const VERSION = '0.1.10';
+const VERSION = '0.1.11';
 
 type Reply = { content: { type: 'text'; text: string }[]; isError?: boolean };
 const text = (t: string, isError = false): Reply => ({ content: [{ type: 'text', text: t }], ...(isError ? { isError } : {}) });
@@ -333,6 +333,31 @@ export async function runMcp(): Promise<void> {
     },
     async ({ kind, key, superseded_by }) =>
       publish({ type: 'close', kind, key, data: superseded_by ? { superseded_by } : {} }, `Removed ${kind} "${key}".`),
+  );
+
+  register(
+    'plan_tidy',
+    {
+      description:
+        'Find plan entries that are finished, duplicated or outdated (tasks the commits show done, superseded images/deployments, contracts that are only internal details, decisions that are really status). Returns proposals; pass apply=true to apply them. Takes ~20s.',
+      inputSchema: { apply: z.boolean().optional() },
+    },
+    async ({ apply }) => {
+      const r = repo();
+      if (!r) return text(NOT_A_REPO, true);
+      const { proposeTidy, proposalOps, formatProposals } = await import('./tidy.js');
+      try {
+        const proposals = await proposeTidy(r);
+        if (apply && proposals.length) {
+          writeOps(r, proposalOps(r, proposals));
+          ensureDaemon(r);
+          return text(`Applied ${proposals.length} changes:\n${formatProposals(proposals)}`);
+        }
+        return text(`${formatProposals(proposals)}${proposals.length ? '\n\nCall again with apply=true to apply.' : ''}`);
+      } catch (err) {
+        return text(`Tidy failed: ${(err as Error).message}`, true);
+      }
+    },
   );
 
   register(

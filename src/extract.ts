@@ -5,7 +5,7 @@ import path from 'node:path';
 import { describeEntry } from './core/format.js';
 import { entryId, reduce } from './core/plan.js';
 import { KINDS, type Kind } from './core/types.js';
-import { samePerson, type Repo } from './git.js';
+import { samePerson, tryGit, type Repo } from './git.js';
 import { log } from './log.js';
 import { readState, writeOps, type NewOp } from './store.js';
 import { isSubstantive, renderTranscript } from './transcript.js';
@@ -18,8 +18,8 @@ export const SYSTEM_PROMPT = `You maintain a shared plan for a team of coding ag
 
 Entry kinds:
 - task: what this agent is working on (from the user's request), notable progress, completion, or being blocked. status: todo | doing | done | blocked.
-- contract: anything other agents build against — API routes with request/response shapes, database schemas, shared types, env vars, CLI flags, module/file ownership. spec must be concrete. breaking=true only if it changes an existing contract incompatibly.
-- decision: a CHOICE the team must keep following (a library, a convention, an architecture, a rule like "never bulk-copy over the store uplink"), with rationale if stated. Not a fact about the current state.
+- contract: an interface OTHER people's work depends on across a boundary: HTTP/API routes and their request/response shapes, database schemas, env vars, CLI flags, event/message formats, types shared between separately-built parts, file/module ownership. spec must be concrete. breaking=true only if it changes an existing contract incompatibly. NOT contracts: a component's props, an internal function's signature, i18n strings, CSS, test setup, or anything only used inside the module that defines it.
+- decision (only project-wide; not how one function or screen works internally): a CHOICE the team must keep following (a library, a convention, an architecture, a rule like "never bulk-copy over the store uplink"), with rationale if stated. Not a fact about the current state.
 - question: an open question that needs input from the team. If the transcript answers or resolves an existing open question, emit it with its exact key and the answer in "answer" (it is then closed).
 - note: the team notebook for STATE and FINDINGS that teammates benefit from but that aren't choices: what's running where, which machine is busy, disk/space, what was deployed or built (and where), measurements, eval/benchmark results, root causes found, incidents. Reuse a key to update a running status (e.g. "lab-box-status").
 
@@ -30,7 +30,8 @@ Rules:
 - Skip internal implementation details, debugging, exploration, and anything that only matters to this agent.
 - When an item matches an existing plan entry, reuse its exact key and only emit it if something changed.
 - Keys: kebab-case for tasks/decisions/questions (e.g. "auth-api"); natural names for contracts (e.g. "POST /api/login", "User").
-- Prefer a few high-value entries. An empty list is a good answer when nothing qualifies.
+- Prefer a few high-value entries. An empty list is a good answer when nothing qualifies. The plan is read by every agent at every session start: an entry that nobody else will act on is noise.
+- Recent commits are listed for context. If a commit clearly completes an open task in the plan (same work, even if worded differently), emit that task with its exact key and status "done", quoting the commit hash and subject as evidence.
 - evidence: a short verbatim quote from the transcript supporting the entry.
 - replaces: when the work clearly abandons or overturns an existing plan entry (a new approach, a switched library, a dropped feature), list that entry's exact key so it is removed. Only for explicit changes of direction, never because something is merely related.
 - areas: repo-relative files or directories the entry concerns (for tasks: what this agent is changing).
@@ -239,10 +240,13 @@ export function toOps(extracted: Extracted[], repo: Repo, agentId: string): NewO
       case 'task':
         data = { title: e.title ?? e.text ?? e.key, status: e.status ?? 'doing', owner: repo.memberId };
         break;
-      case 'contract':
+      case 'contract': {
         if (!e.spec) continue;
-        data = { spec: e.spec, breaking: e.breaking ?? false };
+        // Only a change to an existing contract can break anyone.
+        const exists = entries.get(entryId({ kind: 'contract', key: e.key }))?.status === 'open';
+        data = { spec: e.spec, breaking: exists && e.breaking === true };
         break;
+      }
       case 'decision':
         if (!e.text) continue;
         data = { text: e.text, ...(e.rationale ? { rationale: e.rationale } : {}) };
@@ -281,12 +285,19 @@ export function toOps(extracted: Extracted[], repo: Repo, agentId: string): NewO
   return ops;
 }
 
+/** Commits from the last day, newest first, so the extractor can connect finished work to open tasks. */
+export function recentCommits(repo: Repo, since = '24 hours ago', max = 40): string {
+  const out = tryGit(repo.root, ['log', '--all', '--no-merges', `--since=${since}`, `-n${max}`, '--date=format:%m-%d %H:%M', '--format=%h %ad %s']);
+  return out ? out.slice(0, 4000) : '';
+}
+
 export function buildPrompt(repo: Repo, segment: string): string {
   // The plan plus only the last day of notes: the full notebook would swamp the prompt.
   const dayAgo = Date.now() - 24 * 60 * 60_000;
   const entries = [...reduce(readState(repo).ops).values()].filter((e) => e.status === 'open' && (e.kind !== 'note' || e.updatedAt > dayAgo));
   const plan = entries.length ? entries.map((e) => `- ${e.kind} "${e.key}": ${describeEntry(e).slice(0, 200)}`).join('\n') : '(empty)';
-  return `Current shared plan:\n${plan}\n\nThis agent's team member id: ${repo.memberId}\n\nNew transcript segment:\n${segment}`;
+  const commits = recentCommits(repo);
+  return `Current shared plan:\n${plan}\n\nThis agent's team member id: ${repo.memberId}\n\n${commits ? `Recent commits:\n${commits}\n\n` : ''}New transcript segment:\n${segment}`;
 }
 
 // --- orchestration: one extractor per session at a time, never re-reading old transcript ---
@@ -347,6 +358,8 @@ export async function runExtract(repo: Repo, agent: string, session: string, tra
       fs.rmSync(pending, { force: true });
       await extractOnce(repo, agent, session, transcript);
     } while (fs.existsSync(pending));
+    // Keep the plan from growing forever: at most once a day, and only on large plans.
+    await (await import('./tidy.js')).maybeAutoTidy(repo).catch((err) => log(repo, `auto-tidy failed: ${(err as Error).message}`));
   } finally {
     fs.rmSync(lock, { recursive: true, force: true });
   }

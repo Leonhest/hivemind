@@ -56,6 +56,12 @@ export const competingWarning = (groups: string[][]) =>
     : '';
 
 const DAY = 24 * 60 * 60_000;
+const STALE_MS = 3 * DAY;
+/** Work in progress that nobody has touched for days is probably finished or abandoned. */
+const staleMark = (e: Entry, now: number) =>
+  (e.data.status === 'doing' || e.data.status === 'blocked') && now - e.updatedAt > STALE_MS
+    ? ` (no update for ${Math.round((now - e.updatedAt) / DAY)}d)`
+    : '';
 const TASK_ORDER: Record<string, number> = { doing: 0, blocked: 1, todo: 2, done: 3 };
 const isOpenGoalAlt = (e: Entry, open: Set<string>): Entry =>
   Array.isArray(e.data.alternative_to) ? { ...e, data: { ...e.data, alternative_to: (e.data.alternative_to as string[]).filter((k) => open.has(k)) } } : e;
@@ -92,7 +98,7 @@ export function formatSummary(ops: Op[], opts: SummaryOptions = {}): string {
   // [title, items, cap, guaranteed lines in the compact view, render]
   const sections: [string, Entry[], number, number, (e: Entry) => string][] = [
     ['Goals', of('goal').sort(byRecency), 5, 5, describeEntry],
-    ['Tasks', tasks, 12, 6, describeEntry],
+    ['Tasks', tasks, 12, 6, (e) => describeEntry(e) + staleMark(e, now)],
     ['Contracts (shared APIs, schemas, types)', of('contract').sort(byRecency), 8, 3, describeEntry],
     ['Decisions', of('decision').sort(byRecency), 10, 4, describeEntry],
     ['Open questions', of('question').sort(byRecency), 6, 3, describeEntry],

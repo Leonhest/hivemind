@@ -13,6 +13,8 @@ const USAGE = `hivemind — a shared, live plan for teams of coding agents
   hivemind status       show sync state for the current repo
   hivemind open         live dashboard in your browser
   hivemind review       check the plan for contradictions (uses your claude/codex login)
+  hivemind tidy         find finished, duplicate and outdated entries (--apply to clean up;
+                        also runs automatically once a day on large plans)
   hivemind doctor       check that everything is wired up
   hivemind disable      turn hivemind off for this clone (enable to turn it back on)
   hivemind plan         print the shared plan for the current repo
@@ -88,6 +90,26 @@ async function main(): Promise<void> {
       rebuild(repo);
       console.log('Checking the plan for contradictions…');
       console.log(formatConflicts(await reviewPlan(repo)));
+      return;
+    }
+    case 'tidy': {
+      const { proposeTidy, proposalOps, formatProposals } = await import('./tidy.js');
+      const repo = requireRepo();
+      rebuild(repo);
+      const apply = args.includes('--apply');
+      const max = Number(args.find((a) => a.startsWith('--max='))?.slice(6) ?? 100);
+      console.log('Looking for finished, duplicate and outdated entries…');
+      const proposals = (await proposeTidy(repo)).slice(0, max);
+      console.log(formatProposals(proposals));
+      if (!proposals.length) return;
+      if (!apply) {
+        console.log(`\nDry run. Apply these ${proposals.length} changes with: hivemind tidy --apply`);
+        return;
+      }
+      writeOps(repo, proposalOps(repo, proposals));
+      ensureDaemon(repo);
+      touchActivity(repo);
+      console.log(`\nApplied ${proposals.length} changes; syncing to teammates.`);
       return;
     }
     case 'open':

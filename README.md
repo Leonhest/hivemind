@@ -48,6 +48,19 @@ At session start agents see the most actionable things first (tasks in progress,
 contracts, decisions, questions, recent notes), with long sections capped so nothing important is
 cut off. Finished tasks and answered questions drop out of that view automatically.
 
+## Keeping the plan small
+
+Plans that only grow stop being read. hivemind keeps them current on its own:
+
+- **The extractor records less:** contracts are only interfaces other people's work depends on
+  (APIs, schemas, env vars, shared types), not component props or internal function signatures;
+  decisions are only project-wide rules. It also sees recent commits, so finished work gets marked done.
+- **A daily tidy** (on plans with 40+ open entries, at most once a day per repo, by whoever's agent is
+  active) closes what is superseded, duplicated or no longer true, marks tasks done that commits show
+  finished, and moves status-like decisions to the notebook. Every change records its reason, and the
+  run is logged in the notebook. Run it yourself with `hivemind tidy` (dry run) / `hivemind tidy --apply`.
+- **Stale work is visible:** a task stuck in progress shows "(no update for 6d)".
+
 ## When the plan changes direction
 
 Plans change mid-hackathon. hivemind makes sure the old direction doesn't linger next to the new one:
@@ -114,6 +127,7 @@ hivemind status       who's in the plan, last sync
 hivemind plan         print the shared plan
 hivemind open         live dashboard in your browser (and a form to add to the plan)
 hivemind review       check the plan for contradictions
+hivemind tidy         find finished, duplicate and outdated entries (--apply to clean up)
 hivemind add <goal|task|contract|decision|question> <key> <text> [--breaking]
 hivemind doctor       check that everything is wired up
 hivemind disable      turn hivemind off for this clone (hivemind enable to undo)
