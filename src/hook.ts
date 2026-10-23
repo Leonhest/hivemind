@@ -5,6 +5,7 @@ import { reduce } from './core/plan.js';
 import { ensureDaemon, readSyncStatus } from './daemon.js';
 import { isExtracting, lastReviewed, spawnExtract } from './extract.js';
 import { FETCH_REFSPEC, findRepo, samePerson, type Repo } from './git.js';
+import { recordAgentCwd } from './agentcwd.js';
 import { log } from './log.js';
 import { PUBLIC_NOTICE, readVisibility, refreshVisibility } from './visibility.js';
 import { loadSession, readState, rebuild, saveSession, touchActivity, type Session } from './store.js';
@@ -242,7 +243,9 @@ export async function runHook(agentName: string, rawEvent: string): Promise<void
     const raw = await readStdin();
     const input = adapter.parse(rawEvent, raw.trim() ? JSON.parse(raw) : {});
     if (!input) return done(fallback);
-    repo = findRepo(input.cwd ?? process.cwd());
+    const cwd = input.cwd ?? process.cwd();
+    recordAgentCwd(cwd);
+    repo = findRepo(cwd);
     if (!repo) return done(adapter.render(input.event, ''));
     // First session in a clone: learn whether the repo is public before showing the plan (bounded wait).
     if (input.event === 'SessionStart' && !readVisibility(repo)) {

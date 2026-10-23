@@ -1,28 +1,61 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
+import fs from 'node:fs';
+import path from 'node:path';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 import { describeEntry, formatSummary } from './core/format.js';
 import { entryId, reduce } from './core/plan.js';
 import { KINDS, type Kind } from './core/types.js';
+import { lastAgentCwd } from './agentcwd.js';
 import { ensureDaemon } from './daemon.js';
 import { findRepo, samePerson, type Repo } from './git.js';
 import { readState, touchActivity, writeOps, type NewOp } from './store.js';
 import { PUBLIC_NOTICE, readVisibility } from './visibility.js';
 
-const VERSION = '0.1.9';
+const VERSION = '0.1.10';
 
 type Reply = { content: { type: 'text'; text: string }[]; isError?: boolean };
 const text = (t: string, isError = false): Reply => ({ content: [{ type: 'text', text: t }], ...(isError ? { isError } : {}) });
 
-const NOT_A_REPO = 'hivemind is inactive here: not inside a git repository with an "origin" remote, or turned off with hivemind disable.';
+const NOT_A_REPO =
+  'hivemind can\'t tell which repo you mean: neither your current directory nor the session\'s start directory is a git repository with an "origin" remote (or hivemind is turned off there with hivemind disable). Call the tool again with repo set to the path of the repo you are working in.';
 const PROPAGATES = "Teammates' agents will see it at their next tool call.";
+
+/** The nearest existing directory at or above `p` (agents sometimes name files that don't exist yet). */
+function existingDir(p: string): string {
+  let dir = path.resolve(p);
+  while (!fs.existsSync(dir) && path.dirname(dir) !== dir) dir = path.dirname(dir);
+  return fs.existsSync(dir) && !fs.statSync(dir).isDirectory() ? path.dirname(dir) : dir;
+}
 
 export async function runMcp(): Promise<void> {
   const server = new McpServer({ name: 'hivemind', version: VERSION });
 
   // Resolved per call: the server may be started before the repo has a remote.
-  // Cursor starts MCP servers outside the project, so its config passes the workspace in HIVEMIND_CWD.
-  const repo = (): Repo | null => findRepo(process.env.HIVEMIND_CWD || process.cwd());
+  // Which repo a call is about, in order: the tool's optional `repo` argument; where the agent's
+  // hooks last saw it (it may have moved into a repo after the session started); Cursor's
+  // HIVEMIND_CWD; the directory this server was started in.
+  const callRepo = new AsyncLocalStorage<string | undefined>();
+  const repo = (): Repo | null => {
+    const explicit = callRepo.getStore();
+    // An explicit path must be honoured or fail: falling back could write to the wrong team's plan.
+    if (explicit) return findRepo(existingDir(explicit));
+    for (const c of [lastAgentCwd(), process.env.HIVEMIND_CWD, process.cwd()]) {
+      const r = c ? findRepo(existingDir(c)) : null;
+      if (r) return r;
+    }
+    return null;
+  };
+  const REPO_ARG = z.string().optional().describe("Path inside the repo you're working in. Only needed if hivemind says it can't tell which repo you mean.");
+  // Every tool takes the optional repo argument.
+  const register = <S extends z.ZodRawShape>(
+    name: string,
+    def: { description: string; inputSchema: S },
+    handler: (args: z.infer<z.ZodObject<S>>) => Promise<Reply>,
+  ) =>
+    server.registerTool(name, { ...def, inputSchema: { ...def.inputSchema, repo: REPO_ARG } } as any, ((args: any) =>
+      callRepo.run(args?.repo, () => handler(args))) as any);
 
   const publishMany = (ops: NewOp[], message: string): Reply => {
     const r = repo();
@@ -36,7 +69,7 @@ export async function runMcp(): Promise<void> {
 
   const entry = (r: Repo, kind: Kind, key: string) => reduce(readState(r).ops).get(entryId({ kind, key }));
 
-  server.registerTool(
+  register(
     'plan_get',
     {
       description:
@@ -52,7 +85,7 @@ export async function runMcp(): Promise<void> {
     },
   );
 
-  server.registerTool(
+  register(
     'task_claim',
     {
       description:
@@ -78,7 +111,7 @@ export async function runMcp(): Promise<void> {
     },
   );
 
-  server.registerTool(
+  register(
     'task_add',
     {
       description:
@@ -120,7 +153,7 @@ export async function runMcp(): Promise<void> {
     },
   );
 
-  server.registerTool(
+  register(
     'task_update',
     {
       description: 'Update a task: progress note, status change, or mark done/blocked.',
@@ -179,7 +212,7 @@ export async function runMcp(): Promise<void> {
     return publishMany([{ kind, key, data }, ...closes], `${message}${replaced}${hint}`);
   };
 
-  server.registerTool(
+  register(
     'contract_publish',
     {
       description:
@@ -196,7 +229,7 @@ export async function runMcp(): Promise<void> {
       publishReplacing('contract', key, { spec, breaking: breaking ?? false, ...(areas ? { areas } : {}) }, replaces, `Published contract "${key}"${breaking ? ' as BREAKING' : ''}.`),
   );
 
-  server.registerTool(
+  register(
     'decision_log',
     {
       description:
@@ -207,7 +240,7 @@ export async function runMcp(): Promise<void> {
       publishReplacing('decision', key, { text: t, ...(rationale ? { rationale } : {}) }, replaces, `Logged decision "${key}".`),
   );
 
-  server.registerTool(
+  register(
     'goal_set',
     {
       description:
@@ -237,7 +270,7 @@ export async function runMcp(): Promise<void> {
     },
   );
 
-  server.registerTool(
+  register(
     'question',
     {
       description: 'Ask the team an open question, or answer one: providing answer resolves it and removes it from the open questions.',
@@ -249,7 +282,7 @@ export async function runMcp(): Promise<void> {
         : publish({ kind: 'question', key, data: t ? { text: t } : {} }, `Asked "${key}".`),
   );
 
-  server.registerTool(
+  register(
     'note_add',
     {
       description:
@@ -266,7 +299,7 @@ export async function runMcp(): Promise<void> {
     },
   );
 
-  server.registerTool(
+  register(
     'notebook_get',
     {
       description: 'Read the team notebook (status notes, observations, results), newest first. Optionally only notes matching a search term.',
@@ -288,7 +321,7 @@ export async function runMcp(): Promise<void> {
     },
   );
 
-  server.registerTool(
+  register(
     'plan_remove',
     {
       description: 'Remove an obsolete entry from the plan, optionally naming what replaced it.',
@@ -302,7 +335,7 @@ export async function runMcp(): Promise<void> {
       publish({ type: 'close', kind, key, data: superseded_by ? { superseded_by } : {} }, `Removed ${kind} "${key}".`),
   );
 
-  server.registerTool(
+  register(
     'plan_review',
     {
       description:

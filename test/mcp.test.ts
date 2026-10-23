@@ -110,4 +110,22 @@ describe('MCP tools', () => {
     expect((await call('question', { key: 'db', answer: 'Postgres' })).text).toContain('Answered and closed');
     expect((await call('plan_get', { kind: 'question' })).text).not.toContain('Postgres or SQLite?');
   });
+
+  it('an explicit repo argument points a call at another repo', async () => {
+    execFileSync('git', ['init', '-q', '--bare', 'other.git'], { cwd: dir });
+    execFileSync('git', ['clone', '-q', 'other.git', 'other'], { cwd: dir, stdio: 'pipe' });
+    const other = path.join(dir, 'other');
+    fs.mkdirSync(path.join(other, '.git', 'hivemind'), { recursive: true });
+    fs.writeFileSync(path.join(other, '.git', 'hivemind', 'daemon.pid'), String(process.pid));
+    await call('task_add', { repo: path.join(other, 'src'), tasks: [{ key: 'elsewhere', title: 'In the other repo' }] });
+    expect((await call('plan_get', { repo: other })).text).toContain('In the other repo');
+    expect((await call('plan_get', {})).text).not.toContain('In the other repo');
+  });
+
+  it('an explicit repo outside any git repo is an error, never a silent fallback', async () => {
+    const res = await call('task_add', { repo: os.tmpdir(), tasks: [{ key: 'nowhere', title: 'x' }] });
+    expect(res.isError).toBe(true);
+    expect(res.text).toContain("can't tell which repo");
+    expect((await call('plan_get', {})).text).not.toContain('nowhere');
+  });
 });
