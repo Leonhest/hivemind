@@ -9,6 +9,7 @@ import { toOps, type Extracted } from '../src/extract.js';
 import { findRepo, type Repo } from '../src/git.js';
 import { readState, writeOps } from '../src/store.js';
 import { formatProposals, proposalOps, type Proposal } from '../src/tidy.js';
+import { addTeammate } from './setup.js';
 
 let repo: Repo;
 beforeEach(() => {
@@ -80,6 +81,7 @@ describe('stale tasks and new contracts', () => {
   });
 
   it('a brand-new contract can never be flagged breaking', () => {
+    addTeammate(repo);
     const ex = (e: Partial<Extracted>) => ({ confidence: 0.9, evidence: 'q', ...e }) as Extracted;
     const [fresh] = toOps([ex({ kind: 'contract', key: 'GET /api/new', spec: '{ ok }', breaking: true })], repo, 's');
     expect(fresh.data?.breaking).toBe(false);

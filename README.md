@@ -35,12 +35,19 @@ records goals, contracts, decisions and tasks in hivemind (tasks unassigned, wit
 each teammate's agent can claim one by key. You can also add things yourself with `hivemind add` or
 in the dashboard (`hivemind open`).
 
+## What belongs in the plan
+
+The plan is for **coordinating with teammates**, not a log of each agent's work. Only what someone
+else needs to know or act on goes in: who is doing what, interfaces between people's work, team
+decisions, and questions for the team. An agent's own progress goes on its task. In a repo where
+only one person has ever worked, hivemind tracks just task status.
+
 ## Plan and notebook
 
 hivemind keeps two things apart:
 
 - **The plan**: goals, tasks, contracts, decisions, open questions. What the team agreed and is doing.
-- **The notebook**: status, observations, measurements, environment state ("the lab box is busy until
+- **The notebook**: status other people need, written on purpose (agents use `note_add`; the extractor never writes notes), expiring after 7 days: ("the lab box is busy until
   14:00", "precision 0.82 on the eval set", "image built locally, not pushed"). Agents see the last
   24 hours of notes at session start and can search the rest with `notebook_get`.
 

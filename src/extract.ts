@@ -5,7 +5,7 @@ import path from 'node:path';
 import { describeEntry } from './core/format.js';
 import { entryId, reduce } from './core/plan.js';
 import { KINDS, type Kind } from './core/types.js';
-import { samePerson, tryGit, type Repo } from './git.js';
+import { personOf, samePerson, tryGit, type Repo } from './git.js';
 import { log } from './log.js';
 import { readState, writeOps, type NewOp } from './store.js';
 import { isSubstantive, renderTranscript } from './transcript.js';
@@ -21,9 +21,8 @@ Entry kinds:
 - contract: an interface OTHER people's work depends on across a boundary: HTTP/API routes and their request/response shapes, database schemas, env vars, CLI flags, event/message formats, types shared between separately-built parts, file/module ownership. spec must be concrete. breaking=true only if it changes an existing contract incompatibly. NOT contracts: a component's props, an internal function's signature, i18n strings, CSS, test setup, or anything only used inside the module that defines it.
 - decision (only project-wide; not how one function or screen works internally; only when the user or team actually decided it, not the agent's own implementation choices): a CHOICE the team must keep following (a library, a convention, an architecture, a rule like "never bulk-copy over the store uplink"), with rationale if stated. Not a fact about the current state.
 - question: an open question that needs input from OTHER team members. Not the agent waiting for its own user's go-ahead, and not something the agent will find out itself. If the transcript answers or resolves an existing open question, emit it with its exact key and the answer in "answer" (it is then closed).
-- note: the team notebook for STATE and FINDINGS that teammates benefit from but that aren't choices: what's running where, which machine is busy, disk/space, what was deployed or built (and where), measurements, eval/benchmark results, root causes found, incidents. Reuse a key to update a running status (e.g. "lab-box-status").
 
-Telling decision and note apart: "We use Postgres" / "Don't deploy on Fridays" → decision. "dev-2 is busy until 14:00" / "precision is 0.82 on the eval set" / "image built locally, not pushed" → note.
+The plan is for coordinating with teammates, not a log of the agent's work. State and findings ("dev-2 is busy", "precision is 0.82", "image built locally") are NOT plan entries: leave them out (agents publish those to the notebook themselves when teammates need them). "We use Postgres" / "Don't deploy on Fridays" → decision.
 
 Rules:
 - Only include things explicitly stated or actually done in the transcript. Never guess.
@@ -53,7 +52,7 @@ export const SCHEMA = {
         additionalProperties: false,
         required: ['kind', 'key', 'title', 'status', 'spec', 'breaking', 'text', 'rationale', 'answer', 'areas', 'replaces', 'confidence', 'evidence'],
         properties: {
-          kind: { type: 'string', enum: KINDS.filter((k) => k !== 'goal') },
+          kind: { type: 'string', enum: KINDS.filter((k) => k !== 'goal' && k !== 'note') },
           key: { type: 'string' },
           title: nullable('string'),
           status: nullable('string', { enum: ['todo', 'doing', 'done', 'blocked', null] }),
@@ -232,10 +231,21 @@ export { askAnyModel };
 
 // --- turning model output into plan ops ---
 
+/** Only one person has ever written to this repo's plan: there is nobody to coordinate with. */
+export function isSoloRepo(repo: Repo): boolean {
+  const people = new Set(readState(repo).ops.map((o) => personOf(o.member)));
+  people.add(personOf(repo.memberId));
+  return people.size <= 1;
+}
+
 export function toOps(extracted: Extracted[], repo: Repo, agentId: string): NewOp[] {
   const entries = reduce(readState(repo).ops);
   const ops: NewOp[] = [];
+  // Solo repos keep only task status: contracts, decisions and questions coordinate with other people.
+  const solo = isSoloRepo(repo);
   for (const e of extracted) {
+    if (e?.kind === 'note') continue; // notes are only written on purpose, with note_add
+    if (solo && e?.kind !== 'task') continue;
     if (!e || typeof e.key !== 'string' || !e.key.trim() || !(e.confidence >= MIN_CONFIDENCE)) continue;
     let data: Record<string, unknown>;
     switch (e.kind) {
@@ -260,10 +270,6 @@ export function toOps(extracted: Extracted[], repo: Repo, agentId: string): NewO
           if (q?.status === 'open') ops.push({ type: 'close', kind: 'question', key: e.key.trim(), data: { answer: e.answer }, source: 'inferred', evidence: String(e.evidence ?? '').slice(0, 300), agent: agentId });
           continue;
         }
-        if (!e.text) continue;
-        data = { text: e.text };
-        break;
-      case 'note':
         if (!e.text) continue;
         data = { text: e.text };
         break;
@@ -299,7 +305,10 @@ export function buildPrompt(repo: Repo, segment: string): string {
   const entries = [...reduce(readState(repo).ops).values()].filter((e) => e.status === 'open' && (e.kind !== 'note' || e.updatedAt > dayAgo));
   const plan = entries.length ? entries.map((e) => `- ${e.kind} "${e.key}": ${describeEntry(e).slice(0, 200)}`).join('\n') : '(empty)';
   const commits = recentCommits(repo);
-  return `Current shared plan:\n${plan}\n\nThis agent's team member id: ${repo.memberId}\n\n${commits ? `Recent commits:\n${commits}\n\n` : ''}New transcript segment:\n${segment}`;
+  const solo = isSoloRepo(repo)
+    ? 'Only one person works in this repo, so only task status is recorded: emit only task entries.\n\n'
+    : '';
+  return `${solo}Current shared plan:\n${plan}\n\nThis agent's team member id: ${repo.memberId}\n\n${commits ? `Recent commits:\n${commits}\n\n` : ''}New transcript segment:\n${segment}`;
 }
 
 // --- orchestration: one extractor per session at a time, never re-reading old transcript ---

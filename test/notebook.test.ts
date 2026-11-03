@@ -8,6 +8,7 @@ import type { Op } from '../src/core/types.js';
 import { toOps, type Extracted } from '../src/extract.js';
 import { findRepo, personOf, samePerson } from '../src/git.js';
 import { writeOps } from '../src/store.js';
+import { addTeammate } from './setup.js';
 
 const NOW = Date.UTC(2026, 9, 15, 12);
 const HOUR = 3_600_000;
@@ -97,15 +98,31 @@ describe('plan summary', () => {
   });
 });
 
-describe('extractor: notes and answered questions', () => {
+describe('extractor: coordination only', () => {
   const root = clone('dev@example.com');
   const repo = findRepo(root)!;
   writeOps(repo, [{ kind: 'question', key: 'which-db', data: { text: 'Postgres or SQLite?' } }]);
   const ex = (e: Partial<Extracted>) => ({ confidence: 0.9, evidence: 'q', ...e }) as Extracted;
 
-  it('records state as notes and closes questions the work answered', () => {
+  it('in a solo repo keeps only task status', () => {
+    const ops = toOps([ex({ kind: 'decision', key: 'db', text: 'Postgres' }), ex({ kind: 'task', key: 'auth', title: 'Auth', status: 'doing' })], repo, 's1');
+    expect(ops.map((o) => o.kind)).toEqual(['task']);
+  });
+
+  it('in a team never writes notes, and closes questions the work answered', () => {
+    addTeammate(repo);
     const ops = toOps([ex({ kind: 'note', key: 'lab-status', text: 'Lab box busy until 14:00' }), ex({ kind: 'question', key: 'which-db', answer: 'Postgres' })], repo, 's1');
-    expect(ops[0]).toMatchObject({ kind: 'note', key: 'lab-status', data: { text: 'Lab box busy until 14:00' } });
-    expect(ops[1]).toMatchObject({ type: 'close', kind: 'question', key: 'which-db', data: { answer: 'Postgres' } });
+    expect(ops).toHaveLength(1);
+    expect(ops[0]).toMatchObject({ type: 'close', kind: 'question', key: 'which-db', data: { answer: 'Postgres' } });
+  });
+});
+
+describe('notes expire', () => {
+  it('after 7 days they are hidden from the notebook view', () => {
+    const fresh = op({ kind: 'note', key: 'now', data: { text: 'Fresh note' }, ts: NOW - 2 * 24 * HOUR });
+    const old = op({ kind: 'note', key: 'old', data: { text: 'Stale note' }, ts: NOW - 10 * 24 * HOUR });
+    const s = formatSummary([fresh, old], { now: NOW, kind: 'note' });
+    expect(s).toContain('Fresh note');
+    expect(s).not.toContain('Stale note');
   });
 });

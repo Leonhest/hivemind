@@ -4,7 +4,7 @@ import path from 'node:path';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
-import { describeEntry, formatSummary } from './core/format.js';
+import { describeEntry, formatSummary, isExpiredNote } from './core/format.js';
 import { entryId, reduce } from './core/plan.js';
 import { KINDS, type Kind } from './core/types.js';
 import { lastAgentCwd } from './agentcwd.js';
@@ -306,14 +306,15 @@ export async function runMcp(): Promise<void> {
       inputSchema: {
         query: z.string().optional().describe('Case-insensitive text to match'),
         limit: z.number().int().min(1).max(200).optional().describe('Default 40'),
+        include_expired: z.boolean().optional().describe('Also show notes older than 7 days (they describe state that has probably changed)'),
       },
     },
-    async ({ query, limit }) => {
+    async ({ query, limit, include_expired }) => {
       const r = repo();
       if (!r) return text(NOT_A_REPO, true);
       const q = query?.toLowerCase();
       const notes = [...reduce(readState(r).ops).values()]
-        .filter((e) => e.kind === 'note' && e.status === 'open' && (!q || JSON.stringify(e.data).toLowerCase().includes(q) || e.key.toLowerCase().includes(q)))
+        .filter((e) => e.kind === 'note' && e.status === 'open' && (include_expired || !isExpiredNote(e)) && (!q || JSON.stringify(e.data).toLowerCase().includes(q) || e.key.toLowerCase().includes(q)))
         .sort((a, b) => b.updatedAt - a.updatedAt)
         .slice(0, limit ?? 40);
       if (!notes.length) return text(q ? `No notes match "${query}".` : 'The notebook is empty.');

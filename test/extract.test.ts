@@ -7,6 +7,7 @@ import { toOps, type Extracted } from '../src/extract.js';
 import { findRepo, type Repo } from '../src/git.js';
 import { ADAPTERS } from '../src/hook.js';
 import { writeOps } from '../src/store.js';
+import { addTeammate } from './setup.js';
 import { isSubstantive, renderTranscript } from '../src/transcript.js';
 
 const j = (v: unknown) => JSON.stringify(v);
@@ -60,6 +61,7 @@ describe('toOps', () => {
     execFileSync('git', ['clone', '-q', 'remote.git', 'me'], { cwd: dir, stdio: 'pipe' });
     execFileSync('git', ['config', 'user.email', 'me@example.com'], { cwd: path.join(dir, 'me') });
     repo = findRepo(path.join(dir, 'me'))!;
+    addTeammate(repo);
   });
   afterAll(() => fs.rmSync(dir, { recursive: true, force: true }));
 
@@ -99,6 +101,7 @@ describe('toOps replaces', () => {
     execFileSync('git', ['init', '-q', '--bare', 'remote.git'], { cwd: dir });
     execFileSync('git', ['clone', '-q', 'remote.git', 'me'], { cwd: dir, stdio: 'pipe' });
     repo = findRepo(path.join(dir, 'me'))!;
+    addTeammate(repo);
     writeOps(repo, [{ kind: 'decision', key: 'hosting-fly', data: { text: 'Deploy on Fly' } }]);
   });
   afterAll(() => fs.rmSync(dir, { recursive: true, force: true }));

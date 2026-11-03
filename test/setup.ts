@@ -21,3 +21,9 @@ Object.assign(process.env, {
   GIT_COMMITTER_NAME: 'hivemind-test',
   GIT_COMMITTER_EMAIL: 'test@example.com',
 });
+
+// Tests that need a team (not a solo repo) add a teammate's entry with this.
+import { writeOps } from '../src/store.js';
+import type { Repo } from '../src/git.js';
+export const addTeammate = (repo: Repo) =>
+  writeOps({ ...repo, memberId: 'teammate-abc123', ownRef: 'refs/hivemind/teammate-abc123' }, [{ kind: 'task', key: 'teammate-work', data: { title: 'Teammate work', status: 'doing', owner: 'teammate-abc123' } }]);

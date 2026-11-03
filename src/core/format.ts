@@ -56,6 +56,9 @@ export const competingWarning = (groups: string[][]) =>
     : '';
 
 const DAY = 24 * 60 * 60_000;
+/** Notes describe state, which goes out of date: after a week they are hidden everywhere. */
+export const NOTE_TTL_MS = 7 * DAY;
+export const isExpiredNote = (e: Entry, now = Date.now()) => e.kind === 'note' && now - e.updatedAt > NOTE_TTL_MS;
 const STALE_MS = 3 * DAY;
 /** Work in progress that nobody has touched for days is probably finished or abandoned. */
 const staleMark = (e: Entry, now: number) =>
@@ -93,7 +96,7 @@ export function formatSummary(ops: Op[], opts: SummaryOptions = {}): string {
   const tasks = of('task')
     .filter((e) => kind === 'task' || e.data.status !== 'done' || recent(e))
     .sort((a, b) => (TASK_ORDER[String(a.data.status ?? 'todo')] ?? 2) - (TASK_ORDER[String(b.data.status ?? 'todo')] ?? 2) || byRecency(a, b));
-  const notes = of('note').filter((e) => kind === 'note' || recent(e)).sort(byRecency);
+  const notes = of('note').filter((e) => (kind === 'note' ? !isExpiredNote(e, now) : recent(e))).sort(byRecency);
 
   // [title, items, cap, guaranteed lines in the compact view, render]
   const sections: [string, Entry[], number, number, (e: Entry) => string][] = [
@@ -110,7 +113,7 @@ export function formatSummary(ops: Op[], opts: SummaryOptions = {}): string {
   const warning = competingWarning(competingGoals(entries));
   if (warning) header.push(warning);
   const hiddenDone = kind ? 0 : of('task').length - tasks.length;
-  const olderNotes = kind ? 0 : of('note').length - notes.length;
+  const olderNotes = kind ? 0 : of('note').filter((e) => !isExpiredNote(e, now)).length - notes.length;
   const footer =
     hiddenDone || olderNotes
       ? [`(${[hiddenDone && `${hiddenDone} finished tasks`, olderNotes && `${olderNotes} older notes`].filter(Boolean).join(' and ')} hidden: plan_get kind=task / notebook_get)`]

@@ -82,9 +82,10 @@ export const ADAPTERS: Record<string, Adapter> = {
 };
 
 const INTRO = `[hivemind] This repo shares a live plan with teammates' coding agents on other machines (synced through git). Teammates' changes appear in your context automatically, and the plan is updated automatically from your work.
+The plan is for coordinating with teammates, not a log of your work: only what someone else needs to know or act on belongs in it. Your own progress goes on your task (task_update), nowhere else.
 For anything other agents build against — API routes, schemas, shared types, file ownership — or project-wide decisions, publish it right away with the hivemind MCP tools (contract_publish, decision_log, task_claim, task_update) so teammates don't wait. Mark incompatible contract changes breaking=true.
 When the user asks you to plan or split up work, record the plan in hivemind: goal_set for goals, contract_publish for the interfaces between pieces, decision_log for choices, and task_add for the tasks (unassigned unless the user says who does what) so teammates can claim them.
-Status, observations, measurements and environment state (what's running where, what's deployed, results) go in the team notebook with note_add, not decision_log; decisions are only choices the team must follow. Never put credentials, personal details or unfixed security issues in the plan.`;
+Use note_add only for state a teammate needs (a shared machine is busy, something was deployed, a result they will use); notes expire after 7 days. Decisions are only choices the team must follow. Never put credentials, personal details or unfixed security issues in the plan.`;
 
 // ~1,500 tokens, sent once per session. Every section is guaranteed a few lines within it.
 const SUMMARY_CHARS = 6000;

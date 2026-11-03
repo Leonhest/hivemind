@@ -2,7 +2,7 @@ import { execFile } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import http from 'node:http';
 import path from 'node:path';
-import { describeChange } from './core/format.js';
+import { describeChange, isExpiredNote } from './core/format.js';
 import { applyOp, entryId, reduce } from './core/plan.js';
 import { KINDS, type Kind } from './core/types.js';
 import { daemonPid, ensureDaemon, readSyncStatus } from './daemon.js';
@@ -40,7 +40,7 @@ function snapshot(repo: Repo) {
   return {
     repo: path.basename(repo.root),
     you: repo.memberId,
-    entries: [...reduce(state.ops).values()].filter((e) => e.status === 'open'),
+    entries: [...reduce(state.ops).values()].filter((e) => e.status === 'open' && !isExpiredNote(e)),
     members: [...members.values()].sort((a, b) => b.lastTs - a.lastTs),
     feed: feed.reverse(),
     sync: readSyncStatus(repo),
