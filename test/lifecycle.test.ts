@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { reduce } from '../src/core/plan.js';
-import { concludeTasks, sessionTasks } from '../src/extract.js';
+import { buildPrompt, concludeTasks, sessionTasks } from '../src/extract.js';
 import { findRepo, type Repo } from '../src/git.js';
 import { handleEvent } from '../src/hook.js';
 import { readState, writeOps } from '../src/store.js';
@@ -37,6 +37,16 @@ describe('when a session ends', () => {
     expect(task('mine')?.data).toMatchObject({ status: 'todo', note: 'The session working on this ended before it was confirmed finished.' });
     expect(task('mine')?.data.owner).toBe(repo.memberId);
     expect(task('other-session')?.data.status).toBe('doing');
+  });
+
+  it("shows the extractor the session's unfinished tasks every turn, so ones it moved on from get settled", () => {
+    handleEvent(repo, { event: 'SessionStart', sessionId: 's5' });
+    writeOps(repo, [{ kind: 'task', key: 'ssh-setup', data: { title: 'Complete SSH key registration', status: 'doing', owner: repo.memberId }, agent: 's5' }]);
+    writeOps(repo, [{ kind: 'task', key: 'someone-else', data: { title: 'Other work', status: 'doing' }, agent: 's6' }]);
+    const prompt = buildPrompt(repo, 'segment', 's5');
+    const own = prompt.slice(prompt.indexOf("This session's unfinished tasks:"), prompt.indexOf('New transcript segment:'));
+    expect(own).toContain('"ssh-setup" (doing): Complete SSH key registration');
+    expect(own).not.toContain('someone-else');
   });
 
   it('counts tasks claimed through the MCP tool in that session', async () => {

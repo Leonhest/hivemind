@@ -67,7 +67,10 @@ Plans that only grow stop being read. hivemind keeps them current on its own:
   finished, and moves status-like decisions to the notebook. Every change records its reason, and the
   run is logged in the notebook. Run it yourself with `hivemind tidy` (dry run) / `hivemind tidy --apply`.
 - **Tasks get concluded:** when an agent session ends, hivemind reads the end of its conversation and
-  settles the tasks it worked on: done, todo (with what's left) or blocked. Unfinished tasks and
+  settles the tasks it worked on: done, todo (with what's left) or blocked. While a session runs,
+  the extractor also checks its earlier tasks, so one it finished or moved on from doesn't stay "doing".
+  A task that names a PR ("PR 123", "PR #123") is marked done as soon as that PR is merged into the
+  main branch, whoever merged it and whichever session was told. Unfinished tasks and
   questions nobody touches for a week are closed as abandoned. A task stuck in progress shows
   "(no update for 6d)" until then.
 

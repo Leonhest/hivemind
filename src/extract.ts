@@ -33,6 +33,7 @@ Rules:
 - At most a handful of entries per segment; usually zero to two.
 - Prefer a few high-value entries. An empty list is a good answer when nothing qualifies. The plan is read by every agent at every session start: an entry that nobody else will act on is noise.
 - Recent commits are listed for context. If a commit clearly completes an open task in the plan (same work, even if worded differently), emit that task with its exact key and status "done", quoting the commit hash and subject as evidence.
+- "This session's unfinished tasks" are tasks this agent took on earlier. If the new segment shows one of them finished (results delivered, PR merged, the user confirms it works or says it's done), emit it with status "done". If the agent has clearly moved on to unrelated work and left one unfinished, emit it as "todo" with a note on what is left. Otherwise leave them alone.
 - evidence: a short verbatim quote from the transcript supporting the entry.
 - replaces: when the work clearly abandons or overturns an existing plan entry (a new approach, a switched library, a dropped feature), list that entry's exact key so it is removed. Only for explicit changes of direction, never because something is merely related.
 - areas: repo-relative files or directories the entry concerns (for tasks: what this agent is changing).
@@ -306,11 +307,13 @@ export function toOps(extracted: Extracted[], repo: Repo, agentId: string): NewO
 
 /** Commits from the last day, newest first, so the extractor can connect finished work to open tasks. */
 export function recentCommits(repo: Repo, since = '24 hours ago', max = 40): string {
-  const out = tryGit(repo.root, ['log', '--all', '--no-merges', `--since=${since}`, `-n${max}`, '--date=format:%m-%d %H:%M', '--format=%h %ad %s']);
+  // Branches and remote branches only: --all would include hivemind's own plan refs. Merges stay
+  // in ("Merged PR 123" is how a PR's completion shows up), except branch-sync merges.
+  const out = tryGit(repo.root, ['log', '--branches', '--remotes', `--since=${since}`, `-n${max}`, '--extended-regexp', '--invert-grep', '--grep=^Merge (remote-tracking )?branch ', '--date=format:%m-%d %H:%M', '--format=%h %ad %s']);
   return out ? out.slice(0, 4000) : '';
 }
 
-export function buildPrompt(repo: Repo, segment: string): string {
+export function buildPrompt(repo: Repo, segment: string, session?: string): string {
   // The plan plus only the last day of notes: the full notebook would swamp the prompt.
   const dayAgo = Date.now() - 24 * 60 * 60_000;
   const entries = [...reduce(readState(repo).ops).values()].filter((e) => e.status === 'open' && (e.kind !== 'note' || e.updatedAt > dayAgo));
@@ -319,7 +322,9 @@ export function buildPrompt(repo: Repo, segment: string): string {
   const solo = isSoloRepo(repo)
     ? 'Only one person works in this repo, so only task status is recorded: emit only task entries.\n\n'
     : '';
-  return `${solo}Current shared plan:\n${plan}\n\nThis agent's team member id: ${repo.memberId}\n\n${commits ? `Recent commits:\n${commits}\n\n` : ''}New transcript segment:\n${segment}`;
+  const mine = session ? sessionTasks(repo, session) : [];
+  const own = mine.length ? `This session's unfinished tasks:\n${mine.map((e) => `- "${e.key}" (${e.data.status}): ${String(e.data.title ?? e.key).slice(0, 200)}`).join('\n')}\n\n` : '';
+  return `${solo}Current shared plan:\n${plan}\n\nThis agent's team member id: ${repo.memberId}\n\n${own}${commits ? `Recent commits:\n${commits}\n\n` : ''}New transcript segment:\n${segment}`;
 }
 
 // --- orchestration: one extractor per session at a time, never re-reading old transcript ---
@@ -403,7 +408,7 @@ async function extractOnce(repo: Repo, agent: string, session: string, transcrip
   let backend: Backend;
   let extracted: Extracted[];
   try {
-    const answer = await askAnyModel(agent, SYSTEM_PROMPT, SCHEMA, buildPrompt(repo, segment));
+    const answer = await askAnyModel(agent, SYSTEM_PROMPT, SCHEMA, buildPrompt(repo, segment, session));
     backend = answer.backend;
     extracted = answer.result.ops ?? [];
   } catch (err) {

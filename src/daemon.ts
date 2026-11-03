@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { FETCH_REFSPEC, REMOTE_PREFIX, git, gitAsync, isAncestor, isEnabled, tryGit, type Repo } from './git.js';
 import { log } from './log.js';
+import { closeMergedTasks } from './merged.js';
 import { lastActivity, rebuild, recoverOwnLog } from './store.js';
 import { refreshVisibility } from './visibility.js';
 
@@ -10,6 +11,7 @@ const ACTIVE_FETCH_MS = Number(process.env.HIVEMIND_FETCH_MS ?? 3_000);
 const IDLE_FETCH_MS = 30_000;
 const ACTIVE_WINDOW_MS = 10 * 60_000;
 const EXIT_AFTER_IDLE_MS = 30 * 60_000;
+const MERGED_CHECK_MS = 10 * 60_000;
 
 const pidPath = (repo: Repo) => path.join(repo.stateDir, 'daemon.pid');
 const syncPath = (repo: Repo) => path.join(repo.stateDir, 'sync.json');
@@ -133,6 +135,7 @@ export async function runDaemon(repo: Repo): Promise<void> {
   };
 
   let lastVisibilityCheck = 0;
+  let lastMergedCheck = 0;
   for (;;) {
     if (!isEnabled(repo.root)) {
       log(repo, 'daemon exiting: hivemind disabled for this clone');
@@ -141,6 +144,10 @@ export async function runDaemon(repo: Repo): Promise<void> {
     if (Date.now() - lastVisibilityCheck > 60 * 60_000) {
       lastVisibilityCheck = Date.now();
       refreshVisibility(repo).catch(() => {});
+    }
+    if (Date.now() - lastMergedCheck > MERGED_CHECK_MS) {
+      lastMergedCheck = Date.now();
+      void closeMergedTasks(repo);
     }
     const idleFor = Date.now() - lastActivity(repo);
     if (idleFor > EXIT_AFTER_IDLE_MS) {
