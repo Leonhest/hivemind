@@ -66,7 +66,10 @@ Plans that only grow stop being read. hivemind keeps them current on its own:
   active) closes what is superseded, duplicated or no longer true, marks tasks done that commits show
   finished, and moves status-like decisions to the notebook. Every change records its reason, and the
   run is logged in the notebook. Run it yourself with `hivemind tidy` (dry run) / `hivemind tidy --apply`.
-- **Stale work is visible:** a task stuck in progress shows "(no update for 6d)".
+- **Tasks get concluded:** when an agent session ends, hivemind reads the end of its conversation and
+  settles the tasks it worked on: done, todo (with what's left) or blocked. Unfinished tasks and
+  questions nobody touches for a week are closed as abandoned. A task stuck in progress shows
+  "(no update for 6d)" until then.
 
 ## When the plan changes direction
 

@@ -185,7 +185,7 @@ const claude: Integration = {
     const file = path.join(claudeDir(), 'settings.json');
     const settings = readJson(file);
     settings.hooks = withoutNestedHooks(settings.hooks);
-    for (const event of ['SessionStart', 'UserPromptSubmit', 'PostToolUse', 'Stop']) {
+    for (const event of ['SessionStart', 'UserPromptSubmit', 'PostToolUse', 'Stop', 'SessionEnd']) {
       settings.hooks[event] = [...(settings.hooks[event] ?? []), { hooks: [{ type: 'command', command: `${command()} hook claude ${event}`, timeout: 5 }] }];
     }
     settings.hooks.PreToolUse = [
@@ -210,7 +210,7 @@ const claude: Integration = {
     runQuiet('claude', ['mcp', 'remove', '--scope', 'user', 'hivemind']);
   },
   check() {
-    const missing = hasNestedHooks(path.join(claudeDir(), 'settings.json'), ['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'Stop']);
+    const missing = hasNestedHooks(path.join(claudeDir(), 'settings.json'), ['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'Stop', 'SessionEnd']);
     const problems = missing.length ? [`hooks missing: ${missing.join(', ')}`] : [];
     if (has('claude') && !runQuiet('claude', ['mcp', 'get', 'hivemind'])) problems.push('MCP server not registered');
     return problems;
@@ -247,6 +247,8 @@ const codex: Integration = {
     for (const event of ['SessionStart', 'UserPromptSubmit', 'PostToolUse', 'Stop']) {
       config.hooks[event] = [...(config.hooks[event] ?? []), { hooks: [{ type: 'command', command: `${command()} hook codex ${event}`, timeout: 5 }] }];
     }
+    // Codex caps SessionEnd hooks at 3 s; ours only starts a background process.
+    config.hooks.SessionEnd = [...(config.hooks.SessionEnd ?? []), { hooks: [{ type: 'command', command: `${command()} hook codex SessionEnd`, timeout: 3 }] }];
     config.hooks.PreToolUse = [
       ...(config.hooks.PreToolUse ?? []),
       { matcher: CODEX_EDIT_TOOLS, hooks: [{ type: 'command', command: `${command()} hook codex PreToolUse`, timeout: 5 }] },
@@ -266,7 +268,7 @@ const codex: Integration = {
     runQuiet('codex', ['mcp', 'remove', 'hivemind']);
   },
   check() {
-    const missing = hasNestedHooks(path.join(codexDir(), 'hooks.json'), ['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'Stop']);
+    const missing = hasNestedHooks(path.join(codexDir(), 'hooks.json'), ['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'Stop', 'SessionEnd']);
     const problems = missing.length ? [`hooks missing: ${missing.join(', ')}`] : [];
     const toml = path.join(codexDir(), 'config.toml');
     const config = fs.existsSync(toml) ? fs.readFileSync(toml, 'utf8') : '';
@@ -285,7 +287,7 @@ const cursor: Integration = {
     const config = readJson(hooksFile);
     config.version = config.version ?? 1;
     config.hooks = withoutFlatHooks(config.hooks);
-    for (const event of ['sessionStart', 'postToolUse', 'stop']) {
+    for (const event of ['sessionStart', 'postToolUse', 'stop', 'sessionEnd']) {
       config.hooks[event] = [...(config.hooks[event] ?? []), { command: `${command()} hook cursor ${event}`, timeout: 5 }];
     }
     writeJson(hooksFile, config);
@@ -317,7 +319,7 @@ const cursor: Integration = {
   },
   check() {
     const hooks = fs.existsSync(path.join(cursorDir(), 'hooks.json')) ? readJson(path.join(cursorDir(), 'hooks.json')).hooks ?? {} : {};
-    const missing = ['sessionStart', 'postToolUse', 'stop'].filter((e) => !(hooks[e] ?? []).some(ours));
+    const missing = ['sessionStart', 'postToolUse', 'stop', 'sessionEnd'].filter((e) => !(hooks[e] ?? []).some(ours));
     const problems = missing.length ? [`hooks missing: ${missing.join(', ')}`] : [];
     const mcp = fs.existsSync(path.join(cursorDir(), 'mcp.json')) ? readJson(path.join(cursorDir(), 'mcp.json')) : {};
     if (!mcp.mcpServers?.hivemind) problems.push('MCP server not registered');

@@ -10,7 +10,7 @@ import { log } from './log.js';
 import { PUBLIC_NOTICE, readVisibility, refreshVisibility } from './visibility.js';
 import { loadSession, readState, rebuild, saveSession, touchActivity, type Session } from './store.js';
 
-export type HookEvent = 'SessionStart' | 'UserPromptSubmit' | 'PreToolUse' | 'PostToolUse' | 'Stop';
+export type HookEvent = 'SessionStart' | 'UserPromptSubmit' | 'PreToolUse' | 'PostToolUse' | 'Stop' | 'SessionEnd';
 
 /** Agent-independent view of a hook call. */
 export interface HookInput {
@@ -30,7 +30,7 @@ interface Adapter {
   render(event: HookEvent, context: string): string;
 }
 
-const CLAUDE_EVENTS = new Set<HookEvent>(['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'Stop']);
+const CLAUDE_EVENTS = new Set<HookEvent>(['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'Stop', 'SessionEnd']);
 
 /** Claude Code and Codex share a hook protocol. */
 const claudeLike = (stopOutput: string): Adapter => ({
@@ -48,12 +48,12 @@ const claudeLike = (stopOutput: string): Adapter => ({
     };
   },
   render(event, context) {
-    if (event === 'Stop') return stopOutput;
+    if (event === 'Stop' || event === 'SessionEnd') return stopOutput;
     return context ? JSON.stringify({ hookSpecificOutput: { hookEventName: event, additionalContext: context } }) : '';
   },
 });
 
-const CURSOR_EVENTS: Record<string, HookEvent> = { sessionStart: 'SessionStart', postToolUse: 'PostToolUse', stop: 'Stop' };
+const CURSOR_EVENTS: Record<string, HookEvent> = { sessionStart: 'SessionStart', postToolUse: 'PostToolUse', stop: 'Stop', sessionEnd: 'SessionEnd' };
 
 const cursor: Adapter = {
   parse(rawEvent, raw) {
@@ -168,6 +168,11 @@ export function handleEvent(repo: Repo, input: HookInput, agent = 'claude'): str
   ensureDaemon(repo);
 
   const existing = loadSession(repo, sessionId);
+  // Session over: settle the tasks it worked on (done / todo with what's left / blocked), in the background.
+  if (event === 'SessionEnd') {
+    if (existing && !process.env.HIVEMIND_NO_EXTRACT) spawnExtract(repo, agent, sessionId, input.transcript ?? '', 'final');
+    return '';
+  }
   if (event === 'SessionStart' || !existing) {
     const context = startSession(repo, sessionId);
     return event === 'Stop' ? '' : context;

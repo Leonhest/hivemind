@@ -71,12 +71,17 @@ function candidates(repo: Repo): Entry[] {
 const BATCH = 60;
 const STALE_QUESTION_MS = 7 * DAY;
 
-/** Questions nobody has touched for a week: closed without asking a model. */
-function staleQuestions(entries: Entry[], now: number): Proposal[] {
+/** Questions and unfinished tasks nobody has touched for a week: closed without asking a model. */
+export function staleEntries(entries: Entry[], now: number): Proposal[] {
   return entries
-    .filter((e) => e.kind === 'question' && now - e.updatedAt > STALE_QUESTION_MS)
-    .map((e) => ({ ref: entryId(e), action: 'close_obsolete' as const, reason: `unanswered and untouched for ${Math.round((now - e.updatedAt) / DAY)} days` }));
+    .filter((e) => (e.kind === 'question' || (e.kind === 'task' && e.data.status !== 'done')) && now - e.updatedAt > STALE_QUESTION_MS)
+    .map((e) => ({
+      ref: entryId(e),
+      action: 'close_obsolete' as const,
+      reason: e.kind === 'task' ? `abandoned: no update for ${Math.round((now - e.updatedAt) / DAY)} days` : `unanswered and untouched for ${Math.round((now - e.updatedAt) / DAY)} days`,
+    }));
 }
+const isStale = (e: Entry, now: number) => staleEntries([e], now).length > 0;
 const PARALLEL = 3;
 
 /**
@@ -92,7 +97,7 @@ export async function proposeTidy(repo: Repo, now = Date.now()): Promise<Proposa
   const index = entries.map((e) => `${e.kind}:${e.key}: ${describeEntry(e).slice(0, 90)}`).join('\n');
   const batches: Entry[][] = [];
   for (const kind of ['task', 'question', 'decision', 'contract', 'goal'] as Kind[]) {
-    const ofKind = entries.filter((e) => e.kind === kind && !(kind === 'question' && now - e.updatedAt > STALE_QUESTION_MS)).sort((a, b) => a.key.localeCompare(b.key));
+    const ofKind = entries.filter((e) => e.kind === kind && !isStale(e, now)).sort((a, b) => a.key.localeCompare(b.key));
     for (let i = 0; i < ofKind.length; i += BATCH) batches.push(ofKind.slice(i, i + BATCH));
   }
   const review = async (batch: Entry[]): Promise<Proposal[]> => {
@@ -113,7 +118,7 @@ export async function proposeTidy(repo: Repo, now = Date.now()): Promise<Proposa
   // Entries another proposal keeps (merge or duplicate target) must stay open.
   const kept = new Set(results.filter((p) => p.superseded_by && (p.action === 'merge' || p.action === 'close_duplicate')).map((p) => p.superseded_by!));
   // Only act on entries that exist, once, with an action that fits their kind.
-  return [...staleQuestions(entries, now), ...results].filter((p) => {
+  return [...staleEntries(entries, now), ...results].filter((p) => {
     if (kept.has(p.ref) && p.action !== 'mark_done') return false;
     const e = open.get(p.ref);
     if (!e || seen.has(p.ref)) return false;
@@ -197,15 +202,16 @@ function lastTidy(repo: Repo): number {
 export async function maybeAutoTidy(repo: Repo): Promise<void> {
   if (process.env.HIVEMIND_NO_TIDY) return;
   if (Date.now() - lastTidy(repo) < DAY) return;
-  if (candidates(repo).length < AUTO_MIN_ENTRIES) return;
   try {
     fs.mkdirSync(lockFile(repo));
   } catch {
     if (Date.now() - fs.statSync(lockFile(repo)).mtimeMs < 10 * 60_000) return;
   }
   try {
-    // Big enough to keep up with a busy team's daily inflow.
-    const proposals = (await proposeTidy(repo)).slice(0, 150);
+    // Every plan: close abandoned tasks and dead questions (no model needed).
+    // Large plans: also the model pass. Big enough to keep up with a busy team's daily inflow.
+    const entries = candidates(repo);
+    const proposals = (entries.length >= AUTO_MIN_ENTRIES ? await proposeTidy(repo) : staleEntries(entries, Date.now())).slice(0, 150);
     const ops = proposalOps(repo, proposals);
     if (ops.length) writeOps(repo, ops);
     else writeOps(repo, [{ kind: 'note', key: 'hivemind-tidy', data: { text: `Plan checked by ${repo.memberId} on ${new Date().toISOString().slice(0, 10)}: nothing to tidy.` }, source: 'inferred', agent: 'tidy' }]);

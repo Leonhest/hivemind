@@ -41,9 +41,9 @@ async function main(): Promise<void> {
     case 'mcp':
       return (await import('./mcp.js')).runMcp();
     case 'extract': {
-      const [agent, session, transcript] = args;
+      const [agent, session, transcript, mode] = args;
       const repo = requireRepo();
-      return (await import('./extract.js')).runExtract(repo, agent, session, transcript);
+      return (await import('./extract.js')).runExtract(repo, agent, session, transcript, mode);
     }
     case 'daemon':
       return runDaemon(requireRepo());

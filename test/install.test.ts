@@ -36,7 +36,7 @@ describe('install --only=cursor', () => {
     run('install', '--only=cursor');
     const hooks = read('hooks.json').hooks;
     expect(hooks.afterFileEdit).toEqual([{ command: './fmt.sh' }]);
-    for (const e of ['sessionStart', 'postToolUse', 'stop']) {
+    for (const e of ['sessionStart', 'postToolUse', 'stop', 'sessionEnd']) {
       expect(hooks[e]).toHaveLength(1);
       expect(hooks[e][0].command).toBe(`"${path.join(dir, 'hm', 'bin', 'hivemind')}" hook cursor ${e}`);
     }

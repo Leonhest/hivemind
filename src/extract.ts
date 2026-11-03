@@ -4,10 +4,10 @@ import os from 'node:os';
 import path from 'node:path';
 import { describeEntry } from './core/format.js';
 import { entryId, reduce } from './core/plan.js';
-import { KINDS, type Kind } from './core/types.js';
+import { KINDS, type Entry, type Kind } from './core/types.js';
 import { personOf, samePerson, tryGit, type Repo } from './git.js';
 import { log } from './log.js';
-import { readState, writeOps, type NewOp } from './store.js';
+import { loadSession, readState, writeOps, type NewOp } from './store.js';
 import { isSubstantive, renderTranscript } from './transcript.js';
 
 const MIN_CONFIDENCE = 0.7;
@@ -342,17 +342,17 @@ function newLines(file: string, offset: number): { lines: string[]; offset: numb
 }
 
 /** Starts extraction in a detached background process and returns immediately. */
-export function spawnExtract(repo: Repo, agent: string, session: string, transcript: string): void {
+export function spawnExtract(repo: Repo, agent: string, session: string, transcript: string, mode?: 'final'): void {
   fs.mkdirSync(path.join(repo.stateDir, 'sessions'), { recursive: true });
   const out = fs.openSync(path.join(repo.stateDir, 'extract.log'), 'a');
-  spawn(process.execPath, [process.argv[1], 'extract', agent, session, transcript], {
+  spawn(process.execPath, [process.argv[1], 'extract', agent, session, transcript, ...(mode ? [mode] : [])], {
     cwd: repo.root,
     detached: true,
     stdio: ['ignore', out, out],
   }).unref();
 }
 
-export async function runExtract(repo: Repo, agent: string, session: string, transcript: string): Promise<void> {
+export async function runExtract(repo: Repo, agent: string, session: string, transcript: string, mode?: string): Promise<void> {
   const lock = sessionFile(repo, session, 'extract.lock');
   const pending = sessionFile(repo, session, 'extract.pending');
   fs.mkdirSync(path.dirname(lock), { recursive: true });
@@ -367,8 +367,9 @@ export async function runExtract(repo: Repo, agent: string, session: string, tra
   try {
     do {
       fs.rmSync(pending, { force: true });
-      await extractOnce(repo, agent, session, transcript);
+      if (transcript) await extractOnce(repo, agent, session, transcript).catch((err) => log(repo, `extract failed: ${(err as Error).message}`));
     } while (fs.existsSync(pending));
+    if (mode === 'final') await concludeTasks(repo, agent, session, transcript);
     // Keep the plan from growing forever: at most once a day, and only on large plans.
     await (await import('./tidy.js')).maybeAutoTidy(repo).catch((err) => log(repo, `auto-tidy failed: ${(err as Error).message}`));
   } finally {
@@ -403,4 +404,65 @@ async function extractOnce(repo: Repo, agent: string, session: string, transcrip
   if (ops.length) writeOps(repo, ops);
   save(true);
   log(repo, `extract ${agent}/${session} via ${backend}: ${lines.length} lines → ${extracted.length} candidates → ${ops.length} ops in ${Date.now() - started}ms`);
+}
+
+// --- when a session ends: settle the tasks it worked on, so they don't stay "doing" forever ---
+
+const CONCLUDE_SYSTEM = `A coding agent's session just ended. For each task it was working on, decide from the end of its transcript where the task stands now:
+- done: the work is finished (results reported, merged, deployed, or the user accepted it).
+- todo: not finished; it will need to be picked up again. note: one short sentence on what is left.
+- blocked: it cannot continue until something else happens. note: what it is waiting for.
+Only use done when the transcript shows the task was completed. When unsure, use todo.`;
+
+const CONCLUDE_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['tasks'],
+  properties: {
+    tasks: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['key', 'status', 'note'],
+        properties: { key: { type: 'string' }, status: { type: 'string', enum: ['done', 'todo', 'blocked'] }, note: { type: 'string' } },
+      },
+    },
+  },
+};
+
+/** Tasks this session claimed or updated that are still in progress. */
+export function sessionTasks(repo: Repo, session: string): Entry[] {
+  const s = loadSession(repo, session);
+  if (!s) return [];
+  const own = new Set(s.ownOps);
+  const state = readState(repo);
+  const touched = new Set(state.ops.filter((o) => o.kind === 'task' && (own.has(o.id) || o.agent === session)).map((o) => o.key));
+  return [...reduce(state.ops).values()].filter((e) => e.kind === 'task' && e.status === 'open' && touched.has(e.key) && (e.data.status === 'doing' || e.data.status === 'blocked'));
+}
+
+export async function concludeTasks(repo: Repo, agent: string, session: string, transcript: string): Promise<void> {
+  const tasks = sessionTasks(repo, session);
+  if (!tasks.length) return;
+  const base = { kind: 'task' as const, source: 'inferred' as const, agent: session };
+  let ops: NewOp[];
+  try {
+    if (!pickBackend(agent) || !transcript || !fs.existsSync(transcript)) throw new Error('no extractor or transcript');
+    const lines = fs.readFileSync(transcript, 'utf8').split('\n').filter(Boolean).slice(-400);
+    const listing = tasks.map((e) => `- ${e.key}: ${String(e.data.title ?? e.key)} (now ${e.data.status})${e.data.note ? ` — ${String(e.data.note).slice(0, 200)}` : ''}`).join('\n');
+    const { result } = await askAnyModel(agent, CONCLUDE_SYSTEM, CONCLUDE_SCHEMA, `Tasks this session worked on:\n${listing}\n\nEnd of the transcript:\n${renderTranscript(lines, 20_000)}`);
+    const keys = new Set(tasks.map((e) => e.key));
+    ops = (Array.isArray(result.tasks) ? result.tasks : [])
+      .filter((t: any) => keys.has(t.key) && ['done', 'todo', 'blocked'].includes(t.status))
+      .map((t: any) => ({ ...base, key: t.key, data: { status: t.status, note: String(t.note ?? '').slice(0, 300) }, evidence: 'session ended' }));
+    // Anything the model skipped still must not stay "doing" with nobody working on it.
+    for (const e of tasks) if (!ops.some((o) => o.key === e.key) && e.data.status === 'doing') ops.push({ ...base, key: e.key, data: { status: 'todo', note: 'The session working on this ended before it was confirmed finished.' } });
+  } catch (err) {
+    ops = tasks
+      .filter((e) => e.data.status === 'doing')
+      .map((e) => ({ ...base, key: e.key, data: { status: 'todo', note: 'The session working on this ended before it was confirmed finished.' } }));
+    log(repo, `conclude ${session}: no model verdict (${(err as Error).message}); left ${ops.length} tasks as todo`);
+  }
+  if (ops.length) writeOps(repo, ops);
+  log(repo, `conclude ${session}: ${ops.map((o) => `${o.key}=${(o.data as any).status}`).join(', ')}`);
 }
