@@ -40,4 +40,6 @@ export interface State {
   ops: StoredOp[];
   /** refname -> commit sha, used to skip rebuilds when nothing changed. */
   refs: Record<string, string>;
+  /** Log file blobs already read (per-write files never change, so each is read once). */
+  blobs?: string[];
 }

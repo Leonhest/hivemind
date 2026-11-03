@@ -112,6 +112,14 @@ async function main(): Promise<void> {
       console.log(`\nApplied ${proposals.length} changes; syncing to teammates.`);
       return;
     }
+    case 'repair': {
+      const { recoverOwnLog } = await import('./store.js');
+      const repo = requireRepo();
+      const n = recoverOwnLog(repo);
+      console.log(n ? `Restored ${n} entries that an older hivemind version dropped from your log; syncing.` : 'Your log is complete; nothing to repair.');
+      if (n) ensureDaemon(repo);
+      return;
+    }
     case 'open':
       return (await import('./dashboard.js')).runDashboard(requireRepo(), args);
     case 'doctor':

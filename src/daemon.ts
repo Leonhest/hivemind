@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { FETCH_REFSPEC, REMOTE_PREFIX, git, gitAsync, isAncestor, isEnabled, tryGit, type Repo } from './git.js';
 import { log } from './log.js';
-import { lastActivity, rebuild } from './store.js';
+import { lastActivity, rebuild, recoverOwnLog } from './store.js';
 import { refreshVisibility } from './visibility.js';
 
 const ACTIVE_FETCH_MS = Number(process.env.HIVEMIND_FETCH_MS ?? 3_000);
@@ -85,8 +85,15 @@ export async function pushOwnRef(repo: Repo): Promise<'pushed' | 'up-to-date'> {
   const remoteOwn = REMOTE_PREFIX + repo.memberId;
   const local = tryGit(repo.root, ['rev-parse', '-q', '--verify', repo.ownRef]);
   if (!local || local === tryGit(repo.root, ['rev-parse', '-q', '--verify', remoteOwn])) return 'up-to-date';
+  // After a compaction the new log doesn't descend from the remote one: replace it, but only if the
+  // remote still holds exactly what we last saw (--force-with-lease), so nothing else is ever lost.
+  const remoteKnown = tryGit(repo.root, ['rev-parse', '-q', '--verify', remoteOwn]);
+  const rewritten = remoteKnown && !isAncestor(repo.root, remoteKnown, local);
+  const args = rewritten
+    ? ['push', '-q', `--force-with-lease=${repo.ownRef}:${remoteKnown}`, 'origin', `+${repo.ownRef}:${repo.ownRef}`]
+    : ['push', '-q', 'origin', `${repo.ownRef}:${repo.ownRef}`];
   try {
-    await gitAsync(repo.root, ['push', '-q', 'origin', `${repo.ownRef}:${repo.ownRef}`]);
+    await gitAsync(repo.root, args, 300_000);
   } catch (err) {
     // Check what the remote has now; only our own data counts as "already done".
     await gitAsync(repo.root, ['fetch', '-q', '--no-tags', 'origin', `+${repo.ownRef}:${remoteOwn}`]).catch(() => {});
@@ -107,6 +114,13 @@ export async function runDaemon(repo: Repo): Promise<void> {
   process.on('exit', release);
   for (const sig of ['SIGINT', 'SIGTERM'] as const) process.on(sig, () => process.exit(0));
   log(repo, `daemon started pid=${process.pid} member=${repo.memberId}`);
+  // Restore entries an older version dropped, before pushing anything.
+  try {
+    const restored = recoverOwnLog(repo);
+    if (restored) log(repo, `recovered ${restored} entries lost from this member's log by hivemind <= 0.1.11`);
+  } catch (err) {
+    log(repo, `log recovery failed: ${(err as Error).message}`);
+  }
 
   let lastFetch = 0;
   let fetchFailures = 0;

@@ -43,9 +43,26 @@ describe('tidy', () => {
     expect(String(byId.get('note:lab-busy')?.data.text)).toContain('Lab box busy until 14:00');
     expect(byId.has('question:colour')).toBe(false);
     expect(byId.has('question:colour-2')).toBe(true);
-    expect(String(byId.get('note:hivemind-tidy')?.data.text)).toMatch(/1 tasks marked done, 2 entries closed as obsolete or duplicate, 1 decisions moved/);
+    expect(String(byId.get('note:hivemind-tidy')?.data.text)).toMatch(/1 tasks marked done, 2 entries closed as obsolete or duplicate, 0 merged into related entries, 1 decisions moved/);
     const closed = reduce(readState(repo).ops).get('question:colour');
     expect(closed?.data.superseded_by).toBe('question:colour-2');
+  });
+
+  it('merges related entries into one, keeping what still holds', () => {
+    writeOps(repo, [
+      { kind: 'decision', key: 'cups-a', data: { text: 'Cups are index-only negatives' } },
+      { kind: 'decision', key: 'cups-b', data: { text: 'Cup rows are re-embedded after each training run' } },
+    ]);
+    writeOps(
+      repo,
+      proposalOps(repo, [
+        { ref: 'decision:cups-b', action: 'merge', reason: 'Same feature', superseded_by: 'decision:cups-a', merged_text: 'Cups are index-only negatives, re-embedded after each training run.' },
+      ]),
+    );
+    const byId = new Map(open().map((e) => [`${e.kind}:${e.key}`, e]));
+    expect(byId.get('decision:cups-a')?.data.text).toBe('Cups are index-only negatives, re-embedded after each training run.');
+    expect(byId.has('decision:cups-b')).toBe(false);
+    expect(reduce(readState(repo).ops).get('decision:cups-b')?.data.superseded_by).toBe('decision:cups-a');
   });
 
   it('formats a readable dry run', () => {

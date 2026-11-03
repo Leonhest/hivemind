@@ -4,7 +4,7 @@ import path from 'node:path';
 import { compareOps } from './core/plan.js';
 import { redact, redactDeep } from './core/redact.js';
 import { KINDS, type Kind, type Op, type State, type StoredOp } from './core/types.js';
-import { appendToOwnRef, readOpsFile, readRefs, type Repo } from './git.js';
+import { appendToOwnRef, compactOwnLog, isLegacyLog, logBlobs, lostOwnOps, readBlobs, readRefs, tryGit, type Repo } from './git.js';
 
 const EMPTY: State = { seq: 0, ops: [], refs: {} };
 
@@ -81,15 +81,61 @@ export function rebuild(repo: Repo): State {
     if (JSON.stringify(refs) === JSON.stringify(state.refs)) return state;
 
     const known = new Set(state.ops.map((o) => o.id));
+    const read = new Set(state.blobs ?? []);
     const fresh = new Map<string, Op>();
-    for (const sha of new Set(Object.values(refs))) {
-      for (const op of parseOps(readOpsFile(repo, sha))) if (!known.has(op.id)) fresh.set(op.id, op);
+    // Only blobs not seen before: with one file per write, a ref that moved adds a few small files.
+    const unread = new Set<string>();
+    for (const commit of new Set(Object.values(refs))) for (const f of logBlobs(repo, commit)) if (!read.has(f.sha)) unread.add(f.sha);
+    for (const [sha, text] of readBlobs(repo, [...unread])) {
+      for (const op of parseOps(text)) if (!known.has(op.id)) fresh.set(op.id, op);
+      read.add(sha);
     }
     let seq = state.seq;
     const added: StoredOp[] = [...fresh.values()].sort(compareOps).map((op) => ({ ...op, seq: ++seq }));
-    const next: State = { seq, ops: [...state.ops, ...added], refs };
+    const next: State = { seq, ops: [...state.ops, ...added], refs, blobs: [...read] };
     writeJsonAtomic(statePath(repo), next);
     return next;
+  });
+}
+
+/**
+ * One-time repair for logs written by hivemind ≤ 0.1.11, which could silently drop older entries
+ * once a log passed 1 MB. Restores every entry from the log's history that the head lacks.
+ * Returns how many were restored.
+ */
+export function recoverOwnLog(repo: Repo): number {
+  const recovered = tryGit(repo.root, ['config', 'hivemind.logVersion']) === '2';
+  const compacted = tryGit(repo.root, ['config', 'hivemind.compacted']) === 'true';
+  if (recovered && compacted) return 0;
+  const restored = withLock(repo, () => {
+    let lost: string[] = [];
+    if (!recovered) {
+      lost = lostOwnOps(repo);
+      if (lost.length) appendToOwnRef(repo, lost);
+    }
+    // A long old-format history is too big to push; keep the entries, drop the copies. Once.
+    const commits = Number(tryGit(repo.root, ['rev-list', '--count', repo.ownRef]) ?? 0);
+    if (!compacted && commits > 50) compactOwnLog(repo, upgradeNotice(repo, readState(repo).ops.reduce((m, o) => Math.max(m, o.lamport), 0) + 1));
+    return lost.length;
+  });
+  tryGit(repo.root, ['config', 'hivemind.logVersion', '2']);
+  tryGit(repo.root, ['config', '--bool', 'hivemind.compacted', 'true']);
+  rebuild(repo);
+  return restored;
+}
+
+/** The task older clients see in the legacy file, telling them to update. */
+function upgradeNotice(repo: Repo, lamport: number): string {
+  return JSON.stringify({
+    id: `${Date.now().toString(36)}upgrade`,
+    member: repo.memberId,
+    lamport,
+    ts: Date.now(),
+    type: 'upsert',
+    kind: 'task',
+    key: 'update-hivemind-log-format',
+    data: { title: `Update hivemind (npx hivemind-agents@latest install): ${repo.memberId} now writes the plan in a format older versions can't read`, status: 'todo' },
+    source: 'explicit',
   });
 }
 
@@ -121,7 +167,10 @@ export function writeOps(repo: Repo, inputs: NewOp[]): Op[] {
       source: i.source ?? 'explicit',
       ...(i.evidence ? { evidence: redact(i.evidence) } : {}),
     }));
-    appendToOwnRef(repo, ops.map((o) => JSON.stringify(o)));
+    // First write in the new log layout: leave a note in the legacy file, which is all that
+    // teammates on hivemind ≤ 0.1.11 can read, so they know to update.
+    const legacy = isLegacyLog(repo) ? [upgradeNotice(repo, ++lamport)] : [];
+    appendToOwnRef(repo, ops.map((o) => JSON.stringify(o)), legacy);
     return ops;
   });
   rebuild(repo);

@@ -11,7 +11,7 @@ import { readState, writeOps, type NewOp } from './store.js';
 import { isSubstantive, renderTranscript } from './transcript.js';
 
 const MIN_CONFIDENCE = 0.7;
-const MAX_OPS_PER_RUN = 8;
+const MAX_OPS_PER_RUN = 4;
 const TIMEOUT_MS = 180_000;
 
 export const SYSTEM_PROMPT = `You maintain a shared plan for a team of coding agents working in the same repository, each on a different machine. You read a new segment of ONE agent's transcript and extract only facts the OTHER agents need in order to avoid conflicts and duplicated work.
@@ -19,8 +19,8 @@ export const SYSTEM_PROMPT = `You maintain a shared plan for a team of coding ag
 Entry kinds:
 - task: what this agent is working on (from the user's request), notable progress, completion, or being blocked. status: todo | doing | done | blocked.
 - contract: an interface OTHER people's work depends on across a boundary: HTTP/API routes and their request/response shapes, database schemas, env vars, CLI flags, event/message formats, types shared between separately-built parts, file/module ownership. spec must be concrete. breaking=true only if it changes an existing contract incompatibly. NOT contracts: a component's props, an internal function's signature, i18n strings, CSS, test setup, or anything only used inside the module that defines it.
-- decision (only project-wide; not how one function or screen works internally): a CHOICE the team must keep following (a library, a convention, an architecture, a rule like "never bulk-copy over the store uplink"), with rationale if stated. Not a fact about the current state.
-- question: an open question that needs input from the team. If the transcript answers or resolves an existing open question, emit it with its exact key and the answer in "answer" (it is then closed).
+- decision (only project-wide; not how one function or screen works internally; only when the user or team actually decided it, not the agent's own implementation choices): a CHOICE the team must keep following (a library, a convention, an architecture, a rule like "never bulk-copy over the store uplink"), with rationale if stated. Not a fact about the current state.
+- question: an open question that needs input from OTHER team members. Not the agent waiting for its own user's go-ahead, and not something the agent will find out itself. If the transcript answers or resolves an existing open question, emit it with its exact key and the answer in "answer" (it is then closed).
 - note: the team notebook for STATE and FINDINGS that teammates benefit from but that aren't choices: what's running where, which machine is busy, disk/space, what was deployed or built (and where), measurements, eval/benchmark results, root causes found, incidents. Reuse a key to update a running status (e.g. "lab-box-status").
 
 Telling decision and note apart: "We use Postgres" / "Don't deploy on Fridays" → decision. "dev-2 is busy until 14:00" / "precision is 0.82 on the eval set" / "image built locally, not pushed" → note.
@@ -30,6 +30,8 @@ Rules:
 - Skip internal implementation details, debugging, exploration, and anything that only matters to this agent.
 - When an item matches an existing plan entry, reuse its exact key and only emit it if something changed.
 - Keys: kebab-case for tasks/decisions/questions (e.g. "auth-api"); natural names for contracts (e.g. "POST /api/login", "User").
+- Progress on THIS agent's own work (what it ran, found, built, is waiting for) goes into ITS task: emit the task with its existing key, the current status and a one-line note. Don't create new decisions, notes or questions for it. Use a note only for state other people need (a shared machine is busy, something was deployed, a result the team will use).
+- At most a handful of entries per segment; usually zero to two.
 - Prefer a few high-value entries. An empty list is a good answer when nothing qualifies. The plan is read by every agent at every session start: an entry that nobody else will act on is noise.
 - Recent commits are listed for context. If a commit clearly completes an open task in the plan (same work, even if worded differently), emit that task with its exact key and status "done", quoting the commit hash and subject as evidence.
 - evidence: a short verbatim quote from the transcript supporting the entry.
