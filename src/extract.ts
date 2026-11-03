@@ -98,6 +98,17 @@ const has = (bin: string) => {
   }
 };
 
+/**
+ * The part of a failed CLI run worth showing. CLIs print warnings first (Codex logs managed-config
+ * warnings), so prefer explicit error lines, then the end of the output, not its first 500 chars.
+ */
+function failureMessage(stderr: string, stdout: string): string {
+  const text = `${stderr}\n${stdout}`;
+  const errors = text.split('\n').filter((l) => /^\s*(ERROR|Error|error)[:\s]/.test(l) && !/\bWARN\b/.test(l));
+  if (errors.length) return [...new Set(errors.map((l) => l.trim()))].join(' | ').slice(0, 500);
+  return modelError(stdout) ?? text.trim().slice(-500);
+}
+
 /** The human-readable error from a claude -p JSON result, if it is one. */
 function modelError(out: string): string | null {
   try {
@@ -122,7 +133,7 @@ function run(bin: string, args: string[], input: string): Promise<string> {
     child.on('close', (code) => {
       clearTimeout(timer);
       // claude -p reports errors as JSON on stdout, so include both streams.
-      code === 0 ? resolve(out) : reject(new Error(`${bin} exited ${code}: ${(err.trim() || modelError(out) || out).slice(0, 500)}`));
+      code === 0 ? resolve(out) : reject(new Error(`${bin} exited ${code}: ${failureMessage(err, out)}`));
     });
     child.stdin.end(input);
   });
